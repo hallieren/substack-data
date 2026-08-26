@@ -1,0 +1,11 @@
+{
+ "accept_pre": 1,
+ "accept_post": 0,
+ "baseline_failing": [],
+ "post_failing": [
+  "delete.tests.DeletionTests.test_large_delete",
+  "delete.tests.DeletionTests.test_large_delete_related"
+ ],
+ "patch": "diff --git a/django/db/models/deletion.py b/django/db/models/deletion.py\nindex ae82d26340..82564f3bb5 100644\n--- a/django/db/models/deletion.py\n+++ b/django/db/models/deletion.py\n@@ -4,6 +4,7 @@ from operator import attrgetter\n \n from django.db import IntegrityError, connections, transaction\n from django.db.models import signals, sql\n+from django.db.models.sql.where import OR\n \n \n class ProtectedError(IntegrityError):\n@@ -280,6 +281,26 @@ class Collector:\n                 return\n         self.data = {model: self.data[model] for model in sorted_models}\n \n+    def _fast_deletes_combined(self):\n+        \"\"\"\n+        Return fast deletes combined by model into a single queryset where\n+        possible. Deleting rows for the same table in a single query reduces\n+        the number of round trips to the database.\n+        \"\"\"\n+        by_model = {}\n+        for qs in self.fast_deletes:\n+            by_model.setdefault(qs.model, []).append(qs)\n+        combined = []\n+        for model, qs_list in by_model.items():\n+            if len(qs_list) == 1:\n+                combined.append(qs_list[0])\n+                continue\n+            combined_qs = qs_list[0]._chain()\n+            for qs in qs_list[1:]:\n+                combined_qs.query.where.add(qs.query.where, OR)\n+            combined.append(combined_qs)\n+        return combined\n+\n     def delete(self):\n         # sort instance collections\n         for model, instances in self.data.items():\n@@ -310,7 +331,7 @@ class Collector:\n                     )\n \n             # fast deletes\n-            for qs in self.fast_deletes:\n+            for qs in self._fast_deletes_combined():\n                 count = qs._raw_delete(using=self.using)\n                 deleted_counter[qs.model._meta.label] += count\n \n",
+ "status": "done"
+}

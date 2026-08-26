@@ -1,0 +1,8 @@
+{
+ "accept_pre": 1,
+ "accept_post": 0,
+ "baseline_failing": [],
+ "post_failing": [],
+ "patch": "diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py\nindex 7dcc77b46c..bbd0d03f79 100644\n--- a/django/utils/translation/trans_real.py\n+++ b/django/utils/translation/trans_real.py\n@@ -43,7 +43,10 @@ language_code_re = _lazy_re_compile(\n     re.IGNORECASE\n )\n \n-language_code_prefix_re = _lazy_re_compile(r'^/(\\w+([@-]\\w+)?)(/|$)')\n+language_code_prefix_re = _lazy_re_compile(\n+    r'^/(?P<language_code>[a-z]{1,8}(?:-[a-z0-9]{1,8})*)(?:@[a-z0-9]{1,20})?(/|$)',\n+    re.IGNORECASE,\n+)\n \n \n @receiver(setting_changed)\n@@ -508,7 +511,14 @@ def get_language_from_path(path, strict=False):\n     regex_match = language_code_prefix_re.match(path)\n     if not regex_match:\n         return None\n-    lang_code = regex_match[1]\n+    lang_code = regex_match[\"language_code\"]\n+    # Only allow the generic fallback for language codes with a single\n+    # hyphen to avoid matching arbitrary hyphenated URL segments (e.g.\n+    # ``/de-simple-page/``) as language codes.\n+    if lang_code.count('-') > 1 and lang_code.lower() not in {\n+        lang.lower() for lang in get_languages()\n+    }:\n+        return None\n     try:\n         return get_supported_language_variant(lang_code, strict=strict)\n     except LookupError:\n",
+ "status": "stopped after max_spend_tokens without a final answer"
+}

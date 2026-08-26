@@ -1,0 +1,8 @@
+{
+ "accept_pre": 1,
+ "accept_post": 0,
+ "baseline_failing": [],
+ "post_failing": [],
+ "patch": "diff --git a/seaborn/_core/scales.py b/seaborn/_core/scales.py\nindex 55874bf2..67e13c89 100644\n--- a/seaborn/_core/scales.py\n+++ b/seaborn/_core/scales.py\n@@ -378,7 +378,10 @@ class ContinuousBase(Scale):\n             axis.set_view_interval(vmin, vmax)\n             locs = axis.major.locator()\n             locs = locs[(vmin <= locs) & (locs <= vmax)]\n-            labels = axis.major.formatter.format_ticks(locs)\n+            formatter = axis.major.formatter\n+            labels = formatter.format_ticks(locs)\n+            if formatter.get_offset():\n+                labels = [formatter.format_data(x) if x else \"0\" for x in locs]\n             new._legend = list(locs), list(labels)\n \n         return new\ndiff --git a/seaborn/utils.py b/seaborn/utils.py\nindex 2407853c..e0a9f052 100644\n--- a/seaborn/utils.py\n+++ b/seaborn/utils.py\n@@ -707,6 +707,13 @@ def locator_to_legend_entries(locator, limits, dtype):\n     formatter.set_locs(raw_levels)\n     formatted_levels = [formatter(x) for x in raw_levels]\n \n+    # Include the offset value in the labels when the formatter uses one,\n+    # otherwise the legend values would be missing a multiplicative factor\n+    if formatter.get_offset():\n+        formatted_levels = [\n+            formatter.format_data(x) if x else \"0\" for x in raw_levels\n+        ]\n+\n     return raw_levels, formatted_levels\n \n \n",
+ "status": "done"
+}
