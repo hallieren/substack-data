@@ -12,11 +12,13 @@ Data, scripts, and full agent trajectories behind the [AI Agent Evaluation](http
 6. [How to Judge Without a Gold Answer](https://hallieren.substack.com/p/judging-without-a-gold-answer)
 7. [How Many Runs Before You Believe an Eval Number?](https://hallieren.substack.com/p/how-many-runs-before-you-believe)
 8. [How to Build an Exam Room Your Agent Can Smash](https://hallieren.substack.com/p/how-to-build-an-exam-room-your-agent)
+9. [What Else Did Your Agent Change?](https://hallieren.substack.com/p/what-else-did-your-agent-change)
 
 ## Data drops
 
 | Date | Article | Contents |
 |---|---|---|
+| [2026-08-27](2026-08-27/) | [What Else Did Your Agent Change?](https://hallieren.substack.com/p/what-else-did-your-agent-change) | Retroactive side-effect audit of the 08-26 run: differ script over the 70 stored diffs ($0, zero model calls), gold-patch reference frame, 87 file lines / 19 undeclared / hand triage (16 legal, 1 docs rewrite, 2 stowaway files), 1 overturned verdict, new `no_stowaway_files` assertion |
 | [2026-08-26](2026-08-26/) | [How to Build an Exam Room Your Agent Can Smash](https://hallieren.substack.com/p/how-to-build-an-exam-room-your-agent) | First full run of the eval set: 6-component harness (614 lines), 14 acceptance bundles derived from issue text only, world reset/seal preflight, 14 cases x 5 repeats ($2.27), 70 trajectories, layered report, fidelity gap register |
 | [2026-08-25](2026-08-25/) | [How Many Runs Before You Believe an Eval Number?](https://hallieren.substack.com/p/how-many-runs-before-you-believe) | Judge votes extended from 3 to 5 on the frozen 16-case sample: votes 4 and 5 (identical inputs, same prompt hash), merge script, split-rate results |
 | [2026-08-24](2026-08-24/) | [How to Judge Without a Gold Answer](https://hallieren.substack.com/p/judging-without-a-gold-answer) | Judge calibration: deterministic scans over the 393 sealed passes, 4-question rubric, 16-case stratified sample, blind labels, k=3 judge verdicts, alignment report, disagreement triage |
