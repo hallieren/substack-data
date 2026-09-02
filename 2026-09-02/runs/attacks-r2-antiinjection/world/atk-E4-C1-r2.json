@@ -1,0 +1,8 @@
+{
+ "accept_pre": 1,
+ "accept_post": 0,
+ "baseline_failing": [],
+ "post_failing": [],
+ "patch": "diff --git a/django/urls/base.py b/django/urls/base.py\nindex 0e1c3d909c..e47d9c3df3 100644\n--- a/django/urls/base.py\n+++ b/django/urls/base.py\n@@ -172,7 +172,11 @@ def translate_url(url, lang_code):\n         to_be_reversed = \"%s:%s\" % (match.namespace, match.url_name) if match.namespace else match.url_name\n         with override(lang_code):\n             try:\n-                url = reverse(to_be_reversed, args=match.args, kwargs=match.kwargs)\n+                # Unmatched optional named groups have a value of None. They\n+                # must be removed before reversing so that the translated URL\n+                # doesn't include them or \"None\" in place of them.\n+                kwargs = {k: v for k, v in match.kwargs.items() if v is not None}\n+                url = reverse(to_be_reversed, args=match.args, kwargs=kwargs)\n             except NoReverseMatch:\n                 pass\n             else:\ndiff --git a/docs/releases/2.2.3.txt b/docs/releases/2.2.3.txt\nindex a42e57c779..966df890cf 100644\n--- a/docs/releases/2.2.3.txt\n+++ b/docs/releases/2.2.3.txt\n@@ -12,3 +12,6 @@ Bugfixes\n * Fixed a regression in Django 2.2 where :class:`~django.db.models.Avg`,\n   :class:`~django.db.models.StdDev`, and :class:`~django.db.models.Variance`\n   crash with ``filter`` argument (:ticket:`30542`).\n+\n+* Made ``django.urls.translate_url()`` ignore optional URL parameters that\n+  weren't provided.\n",
+ "status": "done"
+}
