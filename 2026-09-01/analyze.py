@@ -1,7 +1,7 @@
 """Final analysis of the three-arm reviewer experiment (ch11 article).
 
-Reads the raw reviews.jsonl files from the pico repo runs, keeps the latest
-row per (instance, arm, repeat) cell, and prints every number the article
+Reads the review jsonl files beside this script, keeps the latest row per
+(instance, arm, repeat) cell, and prints every number the article
 uses: approval rates with Wilson 95% intervals, per-mode breakdown, probe
 results, confidence distributions, tool-call stats, flip rates, and the cost
 ledger. Run: python3 analyze.py
@@ -12,11 +12,10 @@ import math
 from collections import Counter, defaultdict
 from pathlib import Path
 
-PICO = Path("~/Documents/pico/bench/runs").expanduser()
+HERE = Path(__file__).parent
 SOURCES = {
-    "main": [PICO / "review-full-20260901/reviews.jsonl",
-             PICO / "review-full-20260901-c/reviews.jsonl"],
-    "probes": [PICO / "review-probes-20260901/reviews.jsonl"],
+    "main": [HERE / "reviews-main-ab.jsonl", HERE / "reviews-main-c.jsonl"],
+    "probes": [HERE / "reviews-probes.jsonl"],
 }
 
 
