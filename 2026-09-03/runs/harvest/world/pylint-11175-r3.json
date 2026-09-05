@@ -1,0 +1,11 @@
+{
+ "baseline_failing": [],
+ "post_failing": [],
+ "ref_apply": 0,
+ "ref_results": {
+  "tests/test_functional.py::test_functional[comparison_with_callable]": "PASSED",
+  "tests/test_functional.py::test_functional[comparison_with_callable_typing_constants]": "PASSED"
+ },
+ "patch": "diff --git a/pylint/checkers/base/comparison_checker.py b/pylint/checkers/base/comparison_checker.py\nindex 4867f8098..1ee33cd61 100644\n--- a/pylint/checkers/base/comparison_checker.py\n+++ b/pylint/checkers/base/comparison_checker.py\n@@ -280,11 +280,24 @@ class ComparisonChecker(_BasicChecker):\n         number_of_bare_callables = 0\n         for operand in left_operand, right_operand:\n             inferred = utils.safe_infer(operand)\n+            if not isinstance(inferred, bare_callables):\n+                continue\n+            # A BoundMethod proxies the function node it wraps, which can be a\n+            # FunctionDef (regular method) or a Lambda (a lambda assigned as a class\n+            # attribute). Only FunctionDefs are handled here: a Lambda has no\n+            # decorators and its body is a single expression rather than a list of\n+            # statements, so the FunctionDef-specific checks below do not apply.\n+            if isinstance(inferred, astroid.BoundMethod):\n+                proxied = inferred._proxied\n+                while isinstance(proxied, astroid.UnboundMethod):\n+                    proxied = proxied._proxied\n+                if not isinstance(proxied, nodes.FunctionDef):\n+                    continue\n+                inferred = proxied\n             # Ignore callables that raise, as well as typing constants\n             # implemented as functions (that raise via their decorator)\n             if (\n-                isinstance(inferred, bare_callables)\n-                and \"typing._SpecialForm\" not in inferred.decoratornames()\n+                \"typing._SpecialForm\" not in inferred.decoratornames()\n                 and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n             ):\n                 number_of_bare_callables += 1\n",
+ "status": "done"
+}

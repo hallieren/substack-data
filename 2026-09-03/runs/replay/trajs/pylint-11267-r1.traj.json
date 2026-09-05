@@ -1,0 +1,1620 @@
+{
+ "trajectory_format": "pico-1",
+ "instance_id": "pylint-11267-r1",
+ "info": {
+  "exit_status": "done",
+  "submission": "diff --git a/pylint/checkers/classes/class_checker.py b/pylint/checkers/classes/class_checker.py\nindex b23045907..223379aef 100644\n--- a/pylint/checkers/classes/class_checker.py\n+++ b/pylint/checkers/classes/class_checker.py\n@@ -478,9 +478,12 @@ def _is_attribute_property(name: str, klass: nodes.ClassDef) -> bool:\n \n \n def _has_same_layout_slots(\n-    slots: list[nodes.Const | None], assigned_value: nodes.Name\n+    slots: list[nodes.Const | None], assigned_value: nodes.NodeNG\n ) -> bool:\n-    inferred = next(assigned_value.infer())\n+    try:\n+        inferred = next(assigned_value.infer())\n+    except astroid.InferenceError:\n+        return False\n     if isinstance(inferred, nodes.ClassDef):\n         other_slots = inferred.slots()\n         if all(\n@@ -491,6 +494,37 @@ def _has_same_layout_slots(\n     return False\n \n \n+def _get_assigned_value(node: nodes.AssignAttr) -> nodes.NodeNG | None:\n+    \"\"\"Return the expression assigned to an AssignAttr target, if any.\n+\n+    Returns None when the assigned value cannot be pinpointed from the syntax,\n+    for example when the target is a ``for`` loop, ``with`` statement,\n+    comprehension or annotation-without-value target, or when unpacking from a\n+    RHS that is not a literal tuple.\n+    \"\"\"\n+    target: nodes.NodeNG = node\n+    indices: list[int] = []\n+    while isinstance(target.parent, nodes.Tuple):\n+        indices.append(target.parent.elts.index(target))\n+        target = target.parent\n+    if isinstance(target.parent, nodes.Assign):\n+        value = target.parent.value\n+    elif isinstance(target.parent, nodes.AnnAssign):\n+        value = target.parent.value\n+    else:\n+        return None\n+    if value is None:\n+        return None\n+    for index in reversed(indices):\n+        if not isinstance(value, nodes.Tuple):\n+            return None\n+        try:\n+            value = value.elts[index]\n+        except IndexError:\n+            return None\n+    return value\n+\n+\n MSGS: dict[str, MessageDefinitionTuple] = {\n     \"F0202\": (\n         \"Unable to check methods signature (%s / %s)\",\n@@ -1737,18 +1771,13 @@ a metaclass class method.\",\n     def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n         if not node.attrname == \"__class__\":\n             return\n-        if isinstance(node.parent, nodes.Tuple):\n-            class_index = -1\n-            for i, elt in enumerate(node.parent.elts):\n-                if hasattr(elt, \"attrname\") and elt.attrname == \"__class__\":\n-                    class_index = i\n-            if class_index == -1:\n-                # This should not happen because we checked that the node name\n-                # is '__class__' earlier, but let's not be too confident here\n-                return  # pragma: no cover\n-            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n-        else:\n-            inferred = safe_infer(node.parent.value)\n+        assigned_value = _get_assigned_value(node)\n+        if assigned_value is None:\n+            # We cannot determine the assigned value (e.g. target of a for\n+            # loop, with statement, comprehension, or an annotation without a\n+            # value), so we stay quiet like other uninferable cases.\n+            return\n+        inferred = safe_infer(assigned_value)\n         match inferred:\n             case nodes.ClassDef() | util.UninferableBase() | None:\n                 # If uninferable, we allow it to prevent false positives\n@@ -1824,10 +1853,12 @@ a metaclass class method.\",\n                     if _has_data_descriptor(klass, node.attrname):\n                         # Descriptors circumvent the slots mechanism as well.\n                         return\n-                if node.attrname == \"__class__\" and _has_same_layout_slots(\n-                    slots, node.parent.value\n-                ):\n-                    return\n+                if node.attrname == \"__class__\":\n+                    assigned_value = _get_assigned_value(node)\n+                    if assigned_value is None or _has_same_layout_slots(\n+                        slots, assigned_value\n+                    ):\n+                        return\n                 self.add_message(\n                     \"assigning-non-slot\",\n                     args=(node.attrname,),\n",
+  "model_stats": {
+   "instance_cost": 0.01755,
+   "api_calls": 60,
+   "input_tokens": 24088,
+   "cache_read_tokens": 1900032,
+   "output_tokens": 31634
+  },
+  "config": {
+   "agent": "pico",
+   "harness": "ch13-replay",
+   "case": "pylint-11267",
+   "repeat": 1,
+   "world": "pico-world:pylint-11267",
+   "base_sha": "4be9585ecfe0f9922917905e7884710baa932886",
+   "network": "none",
+   "git_seal": "timesafe-v1",
+   "issue": "https://github.com/pylint-dev/pylint/issues/11267"
+  }
+ },
+ "messages": [
+  {
+   "role": "system",
+   "content": [
+    {
+     "kind": "text",
+     "text": "You are a software engineer fixing a real GitHub issue in the repository at /testbed.\n\nWork methodically: read the relevant code before editing it, reproduce the issue\nwith a small script or command first, make the smallest change that fixes the\ncause, then rerun your reproduction to verify. Also think about edge cases.\n\nRules:\n- Do not modify test files or configuration; fix the source.\n- Keep scratch work in /tmp. Delete any reproduction or helper files you\n  created under /testbed before you finish; they would pollute the submitted diff.\n- Prefer edit_file over write_file so changes stay small.\n- When you are done, summarize what you changed and why. Your final state of\n  /testbed will be submitted automatically as a git diff; there is no submit\n  command."
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "text",
+     "text": "<pr_description>\n# Crash `AttributeError: 'For' object has no attribute 'value'` when `x.__class__` is a for-loop, `with`, or unpacking target\n\n### Bug description\n\nDuring a code correctness review of the class checker I found that any code where `x.__class__` appears as an assignment target *outside* a plain assignment statement makes the whole module fail with a fatal `astroid-error` (F0002), so every other message for that file is lost.\n\nMinimal reproducer:\n\n```python\nclass Foo:\n    pass\n\n\ndef f(foo):\n    for foo.__class__ in [Foo]:\n        pass\n```\n\n`_check_invalid_class_object` assumes the parent of the `AssignAttr` is a plain assignment with a `.value`, but for a `for` loop target the parent is the `For` node:\n\n```\nException on node <AssignAttr.__class__ l.6 at 0x...> in file 'crash_for.py'\nTraceback (most recent call last):\n  File \"pylint/utils/ast_walker.py\", line 87, in walk\n    callback(astroid)\n  File \"pylint/checkers/classes/class_checker.py\", line 1735, in visit_assignattr\n    self._check_invalid_class_object(node)\n  File \"pylint/checkers/classes/class_checker.py\", line 1751, in _check_invalid_class_object\n    inferred = safe_infer(node.parent.value)\nAttributeError: 'For' object has no attribute 'value'\ncrash_for.py:1:0: F0002: crash_for.py: Fatal error while checking 'crash_for.py'. ... (astroid-error)\n```\n\nThe same unchecked assumptions crash on the whole family of legal (if unusual) constructs \u2014 all reproduced locally on `main` (4be9585) and 4.0.7:\n\n```python\nwith ctx as foo.__class__: ...            # AttributeError: 'With' object has no attribute 'value'\n[0 for foo.__class__ in [Foo]]            # AttributeError: 'Comprehension' object has no attribute 'value'\nfoo.__class__: type                       # AttributeError: 'NoneType' object has no attribute 'infer'\nfoo.__class__, x = get_pair()             # AttributeError: 'Call' object has no attribute 'elts'   (line 1749)\nfor foo.__class__, x in [(Foo, 1)]: ...   # AttributeError: 'For' object has no attribute 'value'   (line 1749)\n(a.x, foo.__class__), y = (1, Foo), 2     # AttributeError: 'ClassDef' object has no attribute 'value'\nx, foo.__class__ = (Foo,)                 # IndexError: list index out of range\n```\n\nThe `assigning-non-slot` path has the same problem when the instance's class defines `__slots__`, in `_check_in_slots` (line 1827, `node.parent.value` again) and in `_has_same_layout_slots` (line 483, `next(assigned_value.infer())` without handling `astroid.InferenceError`):\n\n```python\nclass A:\n    __slots__ = [\"x\"]\n\nclass B:\n    __slots__ = [\"x\"]\n\ndef f():\n    inst = A()\n    for inst.__class__ in [B]:       # AttributeError: 'For' object has no attribute 'value' (line 1827)\n        pass\n    inst.__class__, y = B, 1         # AttributeError: 'ClassDef' object has no attribute 'value' (line 1827)\n    inst.__class__ = UndefinedName   # astroid.exceptions.NameInferenceError (line 483)\n```\n\nThis is the remaining family of #7467: the fix for that issue added the tuple-unpacking branch, but only for a literal right-hand side in a plain `Assign`, and the slots code path was not covered.\n\n### Configuration\n\n```ini\n# none needed; reproduces with an empty configuration\n```\n\n### Command used\n\n```shell\npylint --disable=all --enable=invalid-class-object,assigning-non-slot crash_for.py\n```\n\n### Pylint output\n\n```shell\ncrash_for.py:1:0: F0002: crash_for.py: Fatal error while checking 'crash_for.py'. Please open an issue in our bug tracker so we address this. ... (astroid-error)\n```\n\n(full tracebacks above)\n\n### Expected behavior\n\nNo crash. When the value assigned to `__class__` cannot be pinpointed (loop/`with`/comprehension targets, unpacking from a non-literal RHS, bare annotation), the checks should stay quiet like other uninferable cases instead of aborting the whole module; an unresolvable RHS in `_has_same_layout_slots` should get the same answer as any other non-class value (`assigning-non-slot` is still emitted, matching the current behavior for `Uninferable`).\n\nI have a minimal fix with regression tests ready and will open a PR right after this issue.\n\n*This report was prepared with AI assistance as part of a code correctness review; every crash was reproduced locally and each conclusion was reviewed.*\n\n### Pylint version\n\n```shell\npylint 4.1.0-dev0 (main, 4be9585ecfe0f9922917905e7884710baa932886)\nastroid 4.3.0\nPython 3.13.3 (main, Apr  8 2025, 13:54:08) [Clang 17.0.0 (clang-1700.0.13.3)]\n```\n\nAlso reproduced on the released pylint 4.0.7 (astroid 4.0.4).\n\n### OS / Environment\n\nmacOS 15 (darwin 25.5.0)\n\n\n</pr_description>\n\nI've uploaded a python code repository in /testbed. Can you help me implement\nthe necessary changes to the repository so that the requirements specified in\nthe <pr_description> are met? Make minimal changes to non-test files in\n/testbed to fix the issue. The environment (dependencies, test runner) is\nalready set up."
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_wyyS6hoOqPsC3ObvwDJ12773",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline -5 && git status"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_r9TojSMkogI4ogt8hO1q3133",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '1690,1880p' pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_wyyS6hoOqPsC3ObvwDJ12773",
+     "content": "exit 0\n4be9585ec Give every built-in checker an anchor to link to (#11263)\nec608a820 Record the Python 2 checks removed in pylint 2.2 as deleted messages (#11264)\nd4ade4ae7 Regenerate a message page when its documentation data changes (#11260)\nea2a0a039 Link to a single option instead of the whole checker section (#11261)\ncb0b55611 Improve the no-member example and shorten its details (#11259)\nOn branch pico-base\nnothing to commit, working tree clean\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_r9TojSMkogI4ogt8hO1q3133",
+     "content": "exit 0\n    leave_asyncfunctiondef = leave_functiondef\n\n    def visit_attribute(self, node: nodes.Attribute) -> None:\n        \"\"\"Check if the getattr is an access to a class member\n        if so, register it.\n\n        Also check for access to protected\n        class member from outside its class (but ignore __special__\n        methods)\n        \"\"\"\n        self._check_super_without_brackets(node)\n\n        # Check self\n        if self._uses_mandatory_method_param(node):\n            self._accessed.set_accessed(node)\n            return\n        if not self.linter.is_message_enabled(\"protected-access\"):\n            return\n\n        self._check_protected_attribute_access(node)\n\n    def _check_super_without_brackets(self, node: nodes.Attribute) -> None:\n        \"\"\"Check if there is a function call on a super call without brackets.\"\"\"\n        # Check if attribute call is in frame definition in class definition\n        frame = node.frame()\n        if not isinstance(frame, nodes.FunctionDef):\n            return\n        if not isinstance(frame.parent.frame(), nodes.ClassDef):\n            return\n        if not isinstance(node.parent, nodes.Call):\n            return\n        if not isinstance(node.expr, nodes.Name):\n            return\n        if node.expr.name == \"super\":\n            self.add_message(\"super-without-brackets\", node=node.expr, confidence=HIGH)\n\n    @only_required_for_messages(\n        \"assigning-non-slot\", \"invalid-class-object\", \"access-member-before-definition\"\n    )\n    def visit_assignattr(self, node: nodes.AssignAttr) -> None:\n        if isinstance(\n            node.assign_type(), nodes.AugAssign\n        ) and self._uses_mandatory_method_param(node):\n            self._accessed.set_accessed(node)\n        self._check_in_slots(node)\n        self._check_invalid_class_object(node)\n\n    def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n        if not node.attrname == \"__class__\":\n            return\n        if isinstance(node.parent, nodes.Tuple):\n            class_index = -1\n            for i, elt in enumerate(node.parent.elts):\n                if hasattr(elt, \"attrname\") and elt.attrname == \"__class__\":\n                    class_index = i\n            if class_index == -1:\n                # This should not happen because we checked that the node name\n                # is '__class__' earlier, but let's not be too confident here\n                return  # pragma: no cover\n            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n        else:\n            inferred = safe_infer(node.parent.value)\n        match inferred:\n            case nodes.ClassDef() | util.UninferableBase() | None:\n                # If uninferable, we allow it to prevent false positives\n                return\n        self.add_message(\n            \"invalid-class-object\",\n            node=node,\n            args=inferred.__class__.__name__,\n            confidence=INFERENCE,\n        )\n\n    def _check_in_slots(self, node: nodes.AssignAttr) -> None:\n        \"\"\"Check that the given AssignAttr node\n        is defined in the class slots.\n        \"\"\"\n        inferred = safe_infer(node.expr)\n        if not isinstance(inferred, astroid.Instance):\n            return\n\n        klass = inferred._proxied\n        if not has_known_bases(klass):\n            return\n        if \"__slots__\" not in klass.locals:\n            return\n        # If `__setattr__` is defined on the class, then we can't reason about\n        # what will happen when assigning to an attribute.\n        if any(\n            base.locals.get(\"__setattr__\")\n            for base in klass.mro()\n            if base.qname() != \"builtins.object\"\n        ):\n            return\n\n        # If 'typing.Generic' is a base of bases of klass, the cached version\n        # of 'slots()' might have been evaluated incorrectly, thus deleted cache entry.\n        if any(base.qname() == \"typing.Generic\" for base in klass.mro()):\n            cache = getattr(klass, \"__cache\", None)\n            if cache and cache.get(klass.slots) is not None:\n                del cache[klass.slots]\n\n        slots = klass.slots()\n        if slots is None:\n            return\n        # If any ancestor doesn't use slots, the slots\n        # defined for this class are superfluous.\n        if any(\n            \"__slots__\" not in ancestor.locals\n            and ancestor.name not in (\"Generic\", \"object\")\n            for ancestor in klass.ancestors()\n        ):\n            return\n\n        if not any(slot.value == node.attrname for slot in slots):\n            # If we have a '__dict__' in slots, then\n            # assigning any name is valid.\n            if not any(slot.value == \"__dict__\" for slot in slots):\n                if _is_attribute_property(node.attrname, klass):\n                    # Properties circumvent the slots mechanism,\n                    # so we should not emit a warning for them.\n                    return\n                if node.attrname != \"__class__\" and utils.is_class_attr(\n                    node.attrname, klass\n                ):\n                    return\n                if node.attrname in klass.locals:\n                    for local_name in klass.locals.get(node.attrname):\n                        statement = local_name.statement()\n                        if (\n                            isinstance(statement, nodes.AnnAssign)\n                            and not statement.value\n                        ):\n                            return\n                    if _has_data_descriptor(klass, node.attrname):\n                        # Descriptors circumvent the slots mechanism as well.\n                        return\n                if node.attrname == \"__class__\" and _has_same_layout_slots(\n                    slots, node.parent.value\n                ):\n                    return\n                self.add_message(\n                    \"assigning-non-slot\",\n                    args=(node.attrname,),\n                    node=node,\n                    confidence=INFERENCE,\n                )\n\n    @only_required_for_messages(\n        \"protected-access\", \"no-classmethod-decorator\", \"no-staticmethod-decorator\"\n    )\n    def visit_assign(self, assign_node: nodes.Assign) -> None:\n        self._check_classmethod_declaration(assign_node)\n        node = assign_node.targets[0]\n        if not isinstance(node, nodes.AssignAttr):\n            return\n\n        if self._uses_mandatory_method_param(node):\n            return\n        self._check_protected_attribute_access(node)\n\n    def _check_classmethod_declaration(self, node: nodes.Assign) -> None:\n        \"\"\"Checks for uses of classmethod() or staticmethod().\n\n        When a @classmethod or @staticmethod decorator should be used instead.\n        A message will be emitted only if the assignment is at a class scope\n        and only if the classmethod's argument belongs to the class where it\n        is defined.\n        `node` is an assign node.\n        \"\"\"\n        # check the function called is \"classmethod\" or \"staticmethod\"\n        # Check if the arg passed to classmethod is a class member\n        match node.value:\n            case nodes.Call(\n                func=nodes.Name(name=\"classmethod\" | \"staticmethod\" as name),\n                args=[nodes.Name(name=method_name), *_],\n            ):\n                pass\n            case _:\n                return\n\n        msg = (\n            \"no-classmethod-decorator\"\n            if name == \"classmethod\"\n            else \"no-staticmethod-decorator\"\n        )\n        # assignment must be at a class scope\n        parent_class = node.scope()\n        if not isinstance(parent_class, nodes.ClassDef):\n            return\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_VXdfeZZMRVtxVrQCff4r9989",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '1880,1970p' pylint/checkers/classes/class_checker.py && grep -n \"_has_same_layout_slots\" -r pylint/"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_XD8dCn7qkfv2r0bFSlCD8236",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '450,510p' pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_VXdfeZZMRVtxVrQCff4r9989",
+     "content": "exit 0\n\n        if any(method_name == member.name for member in parent_class.mymethods()):\n            self.add_message(msg, node=node.targets[0])\n\n    def _check_protected_attribute_access(\n        self, node: nodes.Attribute | nodes.AssignAttr\n    ) -> None:\n        \"\"\"Given an attribute access node (set or get), check if attribute\n        access is legitimate.\n\n        Call _check_first_attr with node before calling\n        this method. Valid cases are:\n        * self._attr in a method or cls._attr in a classmethod. Checked by\n        _check_first_attr.\n        * Klass._attr inside \"Klass\" class.\n        * Klass2._attr inside \"Klass\" class when Klass2 is a base class of\n            Klass.\n        \"\"\"\n        attrname = node.attrname\n\n        if (\n            not is_attr_protected(attrname)\n            or attrname in self.linter.config.exclude_protected\n        ):\n            return\n\n        # Typing annotations in function definitions can include protected members\n        if utils.is_node_in_type_annotation_context(node):\n            return\n\n        # Return if `attrname` is defined at the module-level or as a class attribute\n        # and is listed in `exclude-protected`.\n        inferred = safe_infer(node.expr)\n        if (\n            inferred\n            and isinstance(inferred, (nodes.ClassDef, nodes.Module))\n            and f\"{inferred.name}.{attrname}\" in self.linter.config.exclude_protected\n        ):\n            return\n\n        klass = node_frame_class(node)\n        if klass is None:\n            # We are not in a class, no remaining valid case\n            self.add_message(\"protected-access\", node=node, args=attrname)\n            return\n\n        # In classes, check we are not getting a parent method\n        # through the class object or through super\n\n        # If the expression begins with a call to super, that's ok.\n        match node.expr:\n            case nodes.Call(func=nodes.Name(name=\"super\")):\n                return\n\n        # If the expression begins with a call to type(self), that's ok.\n        if self._is_type_self_call(node.expr):\n            return\n\n        # If the expression is self.__class__ (or the class of any other\n        # mandatory first method parameter), that's equivalent to type(self).\n        if self._is_self_class_access(node.expr):\n            return\n\n        # Check if we are inside the scope of a class or nested inner class\n        inside_klass = True\n        outer_klass = klass\n        callee = node.expr.as_string()\n        parents_callee = callee.split(\".\")\n        for callee in reversed(parents_callee):\n            if not (outer_klass and callee == outer_klass.name):\n                inside_klass = False\n                break\n\n            # Move up one level within the nested classes\n            outer_klass = get_outer_class(outer_klass)\n\n        # We are in a class, one remaining valid cases, Klass._attr inside\n        # Klass\n        if not (inside_klass or callee in klass.basenames):\n            # Detect property assignments in the body of the class.\n            # This is acceptable:\n            #\n            # class A:\n            #     b = property(lambda: self._b)\n\n            match node.parent.statement():\n                case nodes.Assign(\n                    targets=[nodes.AssignName(name=name)]\n                ) if _is_attribute_property(name, klass):\n                    return\n\npylint/checkers/classes/class_checker.py:480:def _has_same_layout_slots(\npylint/checkers/classes/class_checker.py:1827:                if node.attrname == \"__class__\" and _has_same_layout_slots(\ngrep: pylint/checkers/classes/__pycache__/class_checker.cpython-312.pyc: binary file matches\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_XD8dCn7qkfv2r0bFSlCD8236",
+     "content": "exit 0\ndef _is_attribute_property(name: str, klass: nodes.ClassDef) -> bool:\n    \"\"\"Check if the given attribute *name* is a property in the given *klass*.\n\n    It will look for `property` calls or for functions\n    with the given name, decorated by `property` or `property`\n    subclasses.\n    Returns ``True`` if the name is a property in the given klass,\n    ``False`` otherwise.\n    \"\"\"\n    try:\n        attributes = klass.getattr(name)\n    except astroid.NotFoundError:\n        return False\n    property_name = \"builtins.property\"\n    for attr in attributes:\n        if isinstance(attr, util.UninferableBase):\n            continue\n        try:\n            inferred = next(attr.infer())\n        except astroid.InferenceError:\n            continue\n        if isinstance(inferred, nodes.FunctionDef) and decorated_with_property(\n            inferred\n        ):\n            return True\n        if inferred.pytype() == property_name:\n            return True\n    return False\n\n\ndef _has_same_layout_slots(\n    slots: list[nodes.Const | None], assigned_value: nodes.Name\n) -> bool:\n    inferred = next(assigned_value.infer())\n    if isinstance(inferred, nodes.ClassDef):\n        other_slots = inferred.slots()\n        if all(\n            first_slot and second_slot and first_slot.value == second_slot.value\n            for (first_slot, second_slot) in zip_longest(slots, other_slots)\n        ):\n            return True\n    return False\n\n\nMSGS: dict[str, MessageDefinitionTuple] = {\n    \"F0202\": (\n        \"Unable to check methods signature (%s / %s)\",\n        \"method-check-failed\",\n        \"Used when Pylint has been unable to check methods signature \"\n        \"compatibility for an unexpected reason. Please report this kind \"\n        \"if you don't make sense of it.\",\n    ),\n    \"E0202\": (\n        \"An attribute defined in %s line %s hides this method\",\n        \"method-hidden\",\n        \"Used when a class defines a method which is hidden by an \"\n        \"instance attribute from an ancestor class or set by some \"\n        \"client code.\",\n    ),\n    \"E0203\": (\n        \"Access to member %r before its definition line %s\",\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_LJNqt9G878Lo0rQpL9Ef5303",
+     "name": "write_file",
+     "arguments": {
+      "path": "/tmp/crash_for.py",
+      "content": "class Foo:\n    pass\n\n\ndef f(foo):\n    for foo.__class__ in [Foo]:\n        pass\n"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_ZWbAHbNt0TC6LgNM2Dtd9020",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pylint --disable=all --enable=invalid-class-object,assigning-non-slot /tmp/crash_for.py 2>&1 | head -50"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_LJNqt9G878Lo0rQpL9Ef5303",
+     "content": "wrote 79 bytes to /tmp/crash_for.py",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_ZWbAHbNt0TC6LgNM2Dtd9020",
+     "content": "exit 0\nProblem importing module modified_iterating_checker.py: Unable to find module for /testbed/pylint/checkers/modified_iterating_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module lambda_expressions.py: Unable to find module for /testbed/pylint/checkers/lambda_expressions.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module nested_min_max.py: Unable to find module for /testbed/pylint/checkers/nested_min_max.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module symilar.py: Unable to find module for /testbed/pylint/checkers/symilar.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module imports.py: Unable to find module for /testbed/pylint/checkers/imports.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module match_statements_checker.py: Unable to find module for /testbed/pylint/checkers/match_statements_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module base: Unable to find module for /testbed/pylint/checkers/base in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module logging.py: Unable to find module for /testbed/pylint/checkers/logging.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module newstyle.py: Unable to find module for /testbed/pylint/checkers/newstyle.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module async_checker.py: Unable to find module for /testbed/pylint/checkers/async_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module exceptions.py: Unable to find module for /testbed/pylint/checkers/exceptions.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module stdlib.py: Unable to find module for /testbed/pylint/checkers/stdlib.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module ellipsis_checker.py: Unable to find module for /testbed/pylint/checkers/ellipsis_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_2UzWOF9JpMQZfn8YzaXl4227",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && tail -30 <(python -m pylint --disable=all --enable=invalid-class-object,assigning-non-slot /tmp/crash_for.py 2>&1)"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_JmBy6ypy7SPu2vE5Uli74058",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -c \"import pylint; print(pylint.__file__)\" && ls /testbed/pylint/checkers/ | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_2UzWOF9JpMQZfn8YzaXl4227",
+     "content": "exit 0\n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module base_reporter.py: Unable to find module for /testbed/pylint/reporters/base_reporter.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module json_reporter.py: Unable to find module for /testbed/pylint/reporters/json_reporter.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module progress_reporters.py: Unable to find module for /testbed/pylint/reporters/progress_reporters.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nTraceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/testbed/pylint/__main__.py\", line 10, in <module>\n    pylint.run_pylint()\n  File \"/testbed/pylint/__init__.py\", line 34, in run_pylint\n    PylintRun(argv or sys.argv[1:])\n  File \"/testbed/pylint/lint/run.py\", line 178, in __init__\n    _config_initialization(\n  File \"/testbed/pylint/config/config_initialization.py\", line 120, in _config_initialization\n    for exc_name in linter.config.overgeneral_exceptions:\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'Namespace' object has no attribute 'overgeneral_exceptions'\n************* Module /testbed/pylintrc\npylintrc:1:0: E0015: Unrecognized option found: logging-modules, logging-format-style, notes, min-similarity-lines, ignore-comments, ignore-docstrings, ignore-imports, ignore-signatures, init-import, additional-builtins, callbacks, allow-global-unused-variables, allowed-redefined-builtins, redefining-builtins-modules, ignore-long-lines, single-line-if-stmt, single-line-class-stmt, max-module-lines, indent-string, indent-after-paren, expected-line-ending-format, good-names, good-names-rgxs, bad-names, bad-names-rgxs, name-group, include-naming-hint, function-naming-style, function-rgx, variable-naming-style, variable-rgx, const-naming-style, const-rgx, attr-naming-style, attr-rgx, argument-naming-style, argument-rgx, class-attribute-naming-style, class-attribute-rgx, class-const-naming-style, inlinevar-naming-style, inlinevar-rgx, class-naming-style, class-rgx, module-naming-style, module-rgx, method-naming-style, method-rgx, no-docstring-rgx, docstring-min-length, property-classes, mixin-class-rgx, ignored-classes, generated-members, contextmanager-decorators, ignore-none, ignore-on-opaque-inference, missing-member-hint, missing-member-hint-distance, missing-member-max-choices, spelling-dict, spelling-ignore-words, spelling-ignore-comment-directives, spelling-private-dict-file, spelling-store-unknown-words, max-spelling-suggestions, max-args, max-locals, max-returns, max-branches, max-statements, max-attributes, max-positional-arguments, defining-attr-methods, valid-classmethod-first-arg, valid-metaclass-classmethod-first-arg, exclude-protected, check-protected-access-in-special-methods, allow-any-import-level, allow-wildcard-with-all, allow-reexport-from-package, deprecated-modules, import-graph, ext-import-graph, int-import-graph, known-standard-library, known-third-party, preferred-modules, overgeneral-exceptions, max-nested-blocks, never-returning-functions, check-quote-consistency, check-str-concat-over-line-jumps (unrecognized-option)\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_JmBy6ypy7SPu2vE5Uli74058",
+     "content": "exit 0\n/testbed/pylint/__init__.py\n__init__.py\n__pycache__\nasync_checker.py\nbad_chained_comparison.py\nbase\nbase_checker.py\nclasses\nclear_lru_cache.py\ndataclass_checker.py\ndeprecated.py\ndesign_analysis.py\ndunder_methods.py\nellipsis_checker.py\nexceptions.py\nformat.py\nimports.py\nlambda_expressions.py\nlogging.py\nmatch_statements_checker.py\nmethod_args.py\nmisc.py\nmodified_iterating_checker.py\nnested_min_max.py\nnewstyle.py\nnon_ascii_names.py\nraw_metrics.py\nrefactoring\nspelling.py\nstdlib.py\nstrings.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_NitGoyBnmol9odqx5sFH6288",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls -la pylintrc .pylintrc setup.cfg pyproject.toml 2>&1; python -c \"import astroid; print(astroid.__version__)\"; python -c \"import pylint; print(pylint.__version__)\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_NitGoyBnmol9odqx5sFH6288",
+     "content": "exit 0\nls: cannot access '.pylintrc': No such file or directory\nls: cannot access 'setup.cfg': No such file or directory\n-rw-r--r-- 1 root root 17771 Sep  3 12:19 pylintrc\n-rw-r--r-- 1 root root 10133 Sep  3 12:26 pyproject.toml\n4.2.0b5\n4.1.0-dev0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_mnmOIfDCxEf9XyyULZCi7413",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot crash_for.py 2>&1 | tail -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_mnmOIfDCxEf9XyyULZCi7413",
+     "content": "exit 0\n\n### Expected behavior\n\nNo crash.\n\n### Pylint version\n\n```shell\npylint 4.1.0-dev0\nastroid 4.2.0b5\nPython 3.12.13 (main, Aug  5 2026, 01:16:26) [GCC 14.2.0]\n```\n\n### OS / Environment\n\nlinux (Linux)\n\n### Additional dependencies\n\n<!--\nPlease remove this part if you're not using any of\nyour dependencies in the example.\n -->\n.\n************* Module crash_for\ncrash_for.py:1:0: F0002: crash_for.py: Fatal error while checking 'crash_for.py'. Please open an issue in our bug tracker so we address this. There is a pre-filled template that you can use in '/root/.cache/pylint/pylint-crash-2026-09-03-12-44-03.txt'. (astroid-error)\n\n-----------------------------------\nYour code has been rated at 0.00/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_YzQfxtFqj60PWVtik1CW6899",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"invalid-class-object\" tests/ | head -30"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_ZUB5RN4bMUVadnNDKuMM0643",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"invalid-class-object\" pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_YzQfxtFqj60PWVtik1CW6899",
+     "content": "exit 0\ntests/functional/i/invalid/invalid_class_object.py:20:A.__class__ = defaultdict(str)  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:21:A.__class__ = 1  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:50:        self.__class__, myvar = 1, \"myvalue\"  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:58:        myvar, self.__class__ = \"myvalue\", 1  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:62:        myvar, self.__class__, other = (  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.txt:1:invalid-class-object:20:0:20:11::Invalid assignment to '__class__'. Should be a class definition but got a 'Instance':INFERENCE\ntests/functional/i/invalid/invalid_class_object.txt:2:invalid-class-object:21:0:21:11::Invalid assignment to '__class__'. Should be a class definition but got a 'Const':INFERENCE\ntests/functional/i/invalid/invalid_class_object.txt:3:invalid-class-object:50:8:50:22:Pylint7429Good.class_defining_function_bad:Invalid assignment to '__class__'. Should be a class definition but got a 'Const':INFERENCE\ntests/functional/i/invalid/invalid_class_object.txt:4:invalid-class-object:58:15:58:29:Pylint7429Good.class_defining_function_bad_inverted:Invalid assignment to '__class__'. Should be a class definition but got a 'Const':INFERENCE\ntests/functional/i/invalid/invalid_class_object.txt:5:invalid-class-object:62:15:62:29:Pylint7429Good.class_defining_function_complex_bad:Invalid assignment to '__class__'. Should be a class definition but got a 'Const':INFERENCE\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_ZUB5RN4bMUVadnNDKuMM0643",
+     "content": "exit 0\n692:        \"invalid-class-object\",\n1727:        \"assigning-non-slot\", \"invalid-class-object\", \"access-member-before-definition\"\n1757:            \"invalid-class-object\",\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_Hz3RFQbd4DsEgGr6Ml1k3522",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && cat tests/functional/i/invalid/invalid_class_object.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_Hz3RFQbd4DsEgGr6Ml1k3522",
+     "content": "exit 0\n# pylint: disable=missing-docstring,too-few-public-methods,invalid-name\r\nfrom collections import defaultdict\r\n\r\n\r\nclass A:\r\n    pass\r\n\r\n\r\nclass B:\r\n    pass\r\n\r\n\r\nA.__class__ = B\r\nA.__class__ = str\r\nA.__class__ = float\r\nA.__class__ = dict\r\nA.__class__ = set\r\n\r\nA.__class__ = defaultdict\r\nA.__class__ = defaultdict(str)  # [invalid-class-object]\r\nA.__class__ = 1  # [invalid-class-object]\r\n\r\n\r\n# Here, ambiguity is found when inferring self.__class__\r\nclass C:\r\n    @classmethod\r\n    def _new_instance(cls):\r\n        obj = C()\r\n        obj.__class__ = cls\r\n        return obj\r\n\r\n    def __deepcopy__(self, memo):\r\n        obj = C()\r\n        obj.__class__ = self.__class__\r\n        return obj\r\n\r\n\r\nclass AnotherClass:\r\n    ...\r\n\r\n\r\nclass Pylint7429Good:\r\n    \"\"\"See https://github.com/pylint-dev/pylint/issues/7467\"\"\"\r\n\r\n    def class_defining_function_good(self):\r\n        self.__class__, myvar = AnotherClass, \"myvalue\"\r\n        print(myvar)\r\n\r\n    def class_defining_function_bad(self):\r\n        self.__class__, myvar = 1, \"myvalue\"  # [invalid-class-object]\r\n        print(myvar)\r\n\r\n    def class_defining_function_good_inverted(self):\r\n        myvar, self.__class__ = \"myvalue\", AnotherClass\r\n        print(myvar)\r\n\r\n    def class_defining_function_bad_inverted(self):\r\n        myvar, self.__class__ = \"myvalue\", 1  # [invalid-class-object]\r\n        print(myvar)\r\n\r\n    def class_defining_function_complex_bad(self):\r\n        myvar, self.__class__, other = (  # [invalid-class-object]\r\n            \"myvalue\",\r\n            1,\r\n            \"othervalue\",\r\n        )\r\n        print(myvar, other)\r\n\r\n    def class_defining_function_complex_good(self):\r\n        myvar, self.__class__, other = (\r\n            \"myvalue\",\r\n            str,\r\n            \"othervalue\",\r\n        )\r\n        print(myvar, other)\r\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_oCoNyBZkb5IauPEf9b3n4865",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"__class__\" tests/functional/a/assigning_non_slot.py 2>/dev/null | head; grep -rln \"assigning-non-slot\" tests/functional/ | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_oCoNyBZkb5IauPEf9b3n4865",
+     "content": "exit 0\ntests/functional/a/assigning/assigning_non_slot_4509.txt\ntests/functional/a/assigning/assigning_non_slot.py\ntests/functional/a/assigning/assigning_non_slot.txt\ntests/functional/a/assigning/assigning_non_slot_4509.py\ntests/functional/m/member/member_checks.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_ZXh4R3WKeAHU6pwpmbhF0138",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -n \"__class__\\|_has_same_layout_slots\\|class_\" tests/functional/a/assigning/assigning_non_slot.py | head -40"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_ET_Bd9yvsbus8e7YG7OdKDO9567",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"assigning-non-slot\" tests/functional/m/member/member_checks.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_ZXh4R3WKeAHU6pwpmbhF0138",
+     "content": "exit 0\n145:        self.__class__ = ClassWithSlots\n152:        self.__class__ = ClassWithSlots  # [assigning-non-slot]\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_ET_Bd9yvsbus8e7YG7OdKDO9567",
+     "content": "exit 0\n2:# pylint: disable=using-constant-test,expression-not-assigned, assigning-non-slot, unused-variable,pointless-statement, wrong-import-order, wrong-import-position,import-outside-toplevel\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_s4H40e6bC7JK4mmqTQUO4940",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '100,175p' tests/functional/a/assigning/assigning_non_slot.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_s4H40e6bC7JK4mmqTQUO4940",
+     "content": "exit 0\n    def __init__(self):\n        self.first = 42\n        self.second = 24\n\n\nclass DataDescriptor:\n    def __init__(self, name, default=''):\n        self.__name = name\n        self.__default = default\n\n    def __get__(self, inst, cls):\n        return getattr(inst, self.__name, self.__default)\n\n    def __set__(self, inst, value):\n        setattr(inst, self.__name, value)\n\n\nclass NonDataDescriptor:\n    def __get__(self, inst, cls):\n        return 42\n\n\nclass SlotsWithDescriptor:\n    __slots__ = ['_err']\n    data_descriptor = DataDescriptor('_err')\n    non_data_descriptor = NonDataDescriptor()\n    missing_descriptor = Unknown()\n\n\ndef dont_emit_for_descriptors():\n    inst = SlotsWithDescriptor()\n    # This should not emit, because attr is\n    # a data descriptor\n    inst.data_descriptor = 'foo'\n    inst.non_data_descriptor = 'lala'\n\n\nclass ClassWithSlots:\n    __slots__ = ['foobar']\n\n\nclass ClassReassigningDunderClass:\n    __slots__ = ['foobar']\n\n    def release(self):\n        self.__class__ = ClassWithSlots\n\n\nclass ClassReassingingInvalidLayoutClass:\n    __slots__ = []\n\n    def release(self):\n        self.__class__ = ClassWithSlots  # [assigning-non-slot]\n        self.test = 'test'  # [assigning-non-slot]\n\n\n# pylint: disable=attribute-defined-outside-init\nclass ClassHavingUnknownAncestors(Unknown):\n    __slots__ = ['yo']\n\n    def test(self):\n        self.not_yo = 42\n\n\n# pylint: disable=wrong-import-order, wrong-import-position\nfrom typing import (\n    Generic,\n    TypeVar,\n)\n\nTypeT = TypeVar('TypeT')\n\n\nclass Cls(Generic[TypeT]):\n    \"\"\" Simple class with slots \"\"\"\n    __slots__ = ['value']\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_LSf6KHbDC43XR4Ibrien4285",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -n \"node.parent.value\\|parent.value\" pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_LSf6KHbDC43XR4Ibrien4285",
+     "content": "exit 0\n945:                        and item.parent.value is None\n1749:            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n1751:            inferred = safe_infer(node.parent.value)\n1828:                    slots, node.parent.value\n2074:                        and stmt.parent.value is None\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_eJ7yrEZGwAvWSR4AGVI87927",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '1,80p' pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_eJ7yrEZGwAvWSR4AGVI87927",
+     "content": "exit 0\n# Licensed under the GPL: https://www.gnu.org/licenses/old-licenses/gpl-2.0.html\n# For details: https://github.com/pylint-dev/pylint/blob/main/LICENSE\n# Copyright (c) https://github.com/pylint-dev/pylint/blob/main/CONTRIBUTORS.txt\n\n\"\"\"Classes checker for Python code.\"\"\"\n\nfrom __future__ import annotations\n\nfrom collections import defaultdict\nfrom collections.abc import Callable, Sequence\nfrom functools import cached_property\nfrom itertools import chain, zip_longest\nfrom re import Pattern\nfrom typing import TYPE_CHECKING, Any, NamedTuple, TypeAlias\n\nimport astroid\nimport astroid.exceptions\nfrom astroid import bases, nodes, objects, util\nfrom astroid.typing import SuccessfulInferenceResult\n\nfrom pylint.checkers import BaseChecker, utils\nfrom pylint.checkers.utils import (\n    PYMETHODS,\n    class_is_abstract,\n    decorated_with,\n    decorated_with_property,\n    get_outer_class,\n    has_known_bases,\n    is_attr_private,\n    is_attr_protected,\n    is_builtin_object,\n    is_comprehension,\n    is_iterable,\n    is_property_setter,\n    is_property_setter_or_deleter,\n    node_frame_class,\n    only_required_for_messages,\n    safe_infer,\n    unimplemented_abstract_methods,\n    uninferable_final_decorators,\n)\nfrom pylint.interfaces import HIGH, INFERENCE\nfrom pylint.typing import MessageDefinitionTuple\n\nif TYPE_CHECKING:\n    from pylint.lint.pylinter import PyLinter\n\n\n_AccessNodes: TypeAlias = nodes.Attribute | nodes.AssignAttr\n\nINVALID_BASE_CLASSES = {\"bool\", \"range\", \"slice\", \"memoryview\"}\nBUILTIN_DECORATORS = {\"builtins.property\", \"builtins.classmethod\"}\nASTROID_TYPE_COMPARATORS = {\n    nodes.Const: lambda a, b: a.value == b.value,\n    nodes.ClassDef: lambda a, b: a.qname == b.qname,\n    nodes.Tuple: lambda a, b: a.elts == b.elts,\n    nodes.List: lambda a, b: a.elts == b.elts,\n    nodes.Dict: lambda a, b: a.items == b.items,\n    nodes.Name: lambda a, b: set(a.infer()) == set(b.infer()),\n}\n\n# Dealing with useless override detection, with regard\n# to parameters vs arguments\n\n\nclass _CallSignature(NamedTuple):\n    args: list[str | None]\n    kws: dict[str | None, str | None]\n    starred_args: list[str]\n    starred_kws: list[str]\n\n\nclass _ParameterSignature(NamedTuple):\n    args: list[str]\n    kwonlyargs: list[str]\n    varargs: str\n    kwargs: str\n\n\ndef _signature_from_call(call: nodes.Call) -> _CallSignature:\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_lIBGNRjgjhr1phZhW6Yc4710",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\nfrom astroid import nodes\n\ncode = '''\nclass Foo:\n    pass\n\ndef f(foo):\n    for foo.__class__ in [Foo]:\n        pass\n    with ctx as foo.__class__:\n        pass\n    [0 for foo.__class__ in [Foo]]\n    foo.__class__: type\n    foo.__class__, x = get_pair()\n    for foo.__class__, x in [(Foo, 1)]:\n        pass\n    (a.x, foo.__class__), y = (1, Foo), 2\n    x, foo.__class__ = (Foo,)\n'''\nmod = astroid.parse(code)\ndef walk(node, depth=0):\n    t = type(node).__name__\n    extra = ''\n    if isinstance(node, nodes.AssignAttr):\n        extra = f' attrname={node.attrname!r} parent={type(node.parent).__name__}'\n    if isinstance(node, (nodes.For, nodes.Assign, nodes.Tuple, nodes.AssignAttr, nodes.With, nodes.Comprehension, nodes.AnnAssign)):\n        print('  '*depth + f'{t}{extra}')\n    for child in node.get_children():\n        walk(child, depth+1)\nwalk(mod)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_lIBGNRjgjhr1phZhW6Yc4710",
+     "content": "exit 0\n    For\n      AssignAttr attrname='__class__' parent=For\n    With\n      AssignAttr attrname='__class__' parent=With\n        Comprehension\n          AssignAttr attrname='__class__' parent=Comprehension\n    AnnAssign\n      AssignAttr attrname='__class__' parent=AnnAssign\n    Assign\n      Tuple\n        AssignAttr attrname='__class__' parent=Tuple\n    For\n      Tuple\n        AssignAttr attrname='__class__' parent=Tuple\n        Tuple\n    Assign\n      Tuple\n        Tuple\n          AssignAttr attrname='x' parent=Tuple\n          AssignAttr attrname='__class__' parent=Tuple\n      Tuple\n        Tuple\n    Assign\n      Tuple\n        AssignAttr attrname='__class__' parent=Tuple\n      Tuple\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_k1UGnbPlTBjYwU6oHxdo1061",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\nprint(issubclass(astroid.NameInferenceError, astroid.InferenceError))\nprint(astroid.exceptions.InferenceError, astroid.InferenceError)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_k1UGnbPlTBjYwU6oHxdo1061",
+     "content": "exit 0\nTrue\n<class 'astroid.exceptions.InferenceError'> <class 'astroid.exceptions.InferenceError'>\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_y4ufVMWd79iKfFQvMUzI8049",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"7467\\|invalid-class-object\" tests/ --include=*.py | grep -v \"\\.txt\" | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_y4ufVMWd79iKfFQvMUzI8049",
+     "content": "exit 0\ntests/functional/i/invalid/invalid_class_object.py:20:A.__class__ = defaultdict(str)  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:21:A.__class__ = 1  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:43:    \"\"\"See https://github.com/pylint-dev/pylint/issues/7467\"\"\"\r\ntests/functional/i/invalid/invalid_class_object.py:50:        self.__class__, myvar = 1, \"myvalue\"  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:58:        myvar, self.__class__ = \"myvalue\", 1  # [invalid-class-object]\r\ntests/functional/i/invalid/invalid_class_object.py:62:        myvar, self.__class__, other = (  # [invalid-class-object]\r\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_pY2QI4wj4X3j2UE84UQh6517",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\nm = astroid.parse(\"foo.__class__, foo.__class__ = Foo, Bar\\n\")\nassign = m.body[0]\nprint(type(assign).__name__, len(assign.targets))\ntup = assign.targets[0]\nprint([id(e) for e in tup.elts])\nprint(\"index0:\", tup.elts.index(tup.elts[0]), \"index1:\", tup.elts.index(tup.elts[1]))\nprint(\"eq?\", tup.elts[0] == tup.elts[1])\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_pY2QI4wj4X3j2UE84UQh6517",
+     "content": "exit 0\nAssign 1\n[281473223131504, 281473223131600]\nindex0: 0 index1: 1\neq? False\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_2PTt55tdbY3szS3EDYbS0230",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\nfrom astroid import nodes\nfor code in [\n    \"foo.__class__: type = Foo\\n\",\n    \"with ctx as foo.__class__:\\n    pass\\n\",\n    \"foo.__class__, x = Foo, 1\\n\",\n    \"foo.__class__ = Foo\\n\",\n]:\n    print(\"=====\", repr(code))\n    m = astroid.parse(code)\n    for n in m.nodes_of_class(nodes.AssignAttr):\n        print(type(n).__name__, n.attrname, \"parent:\", type(n.parent).__name__, \"grand:\", type(n.parent.parent).__name__ if hasattr(n,'parent') and getattr(n.parent,'parent',None) else None)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_2PTt55tdbY3szS3EDYbS0230",
+     "content": "exit 0\n===== 'foo.__class__: type = Foo\\n'\nAssignAttr __class__ parent: AnnAssign grand: Module\n===== 'with ctx as foo.__class__:\\n    pass\\n'\nAssignAttr __class__ parent: With grand: Module\n===== 'foo.__class__, x = Foo, 1\\n'\nAssignAttr __class__ parent: Tuple grand: Assign\n===== 'foo.__class__ = Foo\\n'\nAssignAttr __class__ parent: Assign grand: Module\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_H421ONx25U1hO3C600hd7227",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"__class__.*+=\\|+=.*__class__\" tests/ --include=*.py | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_H421ONx25U1hO3C600hd7227",
+     "content": "exit 0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_dBRgop5nLmQHBF94DW4c4525",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -n \"def safe_infer\" -A 30 pylint/checkers/utils.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_dBRgop5nLmQHBF94DW4c4525",
+     "content": "exit 0\n1355:def safe_infer(\n1356-    node: nodes.NodeNG,\n1357-    context: InferenceContext | None = None,\n1358-    *,\n1359-    compare_constants: bool = False,\n1360-    compare_constructors: bool = False,\n1361-) -> InferenceResult | None:\n1362-    \"\"\"Return the inferred value for the given node.\n1363-\n1364-    Return None if inference failed or if there is some ambiguity (more than\n1365-    one node has been inferred of different types).\n1366-\n1367-    If compare_constants is True and if multiple constants are inferred,\n1368-    unequal inferred values are also considered ambiguous and return None.\n1369-\n1370-    If compare_constructors is True and if multiple classes are inferred,\n1371-    constructors with different signatures are held ambiguous and return None.\n1372-    \"\"\"\n1373-    inferred_types: set[str | None] = set()\n1374-    try:\n1375-        infer_gen = node.infer(context=context)\n1376-        value = next(infer_gen)\n1377-    except astroid.InferenceError:\n1378-        return None\n1379-    except Exception as e:  # pragma: no cover\n1380-        raise AstroidError from e\n1381-\n1382-    if not isinstance(value, util.UninferableBase):\n1383-        inferred_types.add(_get_python_type_of_node(value))\n1384-\n1385-    # pylint: disable = too-many-try-statements\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "text",
+     "text": "Let me look at more surrounding context and check astroid node types used."
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_00_qQBSJ7exGzJTSw2aCia74606",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '1720,1835p' pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_qQBSJ7exGzJTSw2aCia74606",
+     "content": "exit 0\n            return\n        if not isinstance(node.expr, nodes.Name):\n            return\n        if node.expr.name == \"super\":\n            self.add_message(\"super-without-brackets\", node=node.expr, confidence=HIGH)\n\n    @only_required_for_messages(\n        \"assigning-non-slot\", \"invalid-class-object\", \"access-member-before-definition\"\n    )\n    def visit_assignattr(self, node: nodes.AssignAttr) -> None:\n        if isinstance(\n            node.assign_type(), nodes.AugAssign\n        ) and self._uses_mandatory_method_param(node):\n            self._accessed.set_accessed(node)\n        self._check_in_slots(node)\n        self._check_invalid_class_object(node)\n\n    def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n        if not node.attrname == \"__class__\":\n            return\n        if isinstance(node.parent, nodes.Tuple):\n            class_index = -1\n            for i, elt in enumerate(node.parent.elts):\n                if hasattr(elt, \"attrname\") and elt.attrname == \"__class__\":\n                    class_index = i\n            if class_index == -1:\n                # This should not happen because we checked that the node name\n                # is '__class__' earlier, but let's not be too confident here\n                return  # pragma: no cover\n            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n        else:\n            inferred = safe_infer(node.parent.value)\n        match inferred:\n            case nodes.ClassDef() | util.UninferableBase() | None:\n                # If uninferable, we allow it to prevent false positives\n                return\n        self.add_message(\n            \"invalid-class-object\",\n            node=node,\n            args=inferred.__class__.__name__,\n            confidence=INFERENCE,\n        )\n\n    def _check_in_slots(self, node: nodes.AssignAttr) -> None:\n        \"\"\"Check that the given AssignAttr node\n        is defined in the class slots.\n        \"\"\"\n        inferred = safe_infer(node.expr)\n        if not isinstance(inferred, astroid.Instance):\n            return\n\n        klass = inferred._proxied\n        if not has_known_bases(klass):\n            return\n        if \"__slots__\" not in klass.locals:\n            return\n        # If `__setattr__` is defined on the class, then we can't reason about\n        # what will happen when assigning to an attribute.\n        if any(\n            base.locals.get(\"__setattr__\")\n            for base in klass.mro()\n            if base.qname() != \"builtins.object\"\n        ):\n            return\n\n        # If 'typing.Generic' is a base of bases of klass, the cached version\n        # of 'slots()' might have been evaluated incorrectly, thus deleted cache entry.\n        if any(base.qname() == \"typing.Generic\" for base in klass.mro()):\n            cache = getattr(klass, \"__cache\", None)\n            if cache and cache.get(klass.slots) is not None:\n                del cache[klass.slots]\n\n        slots = klass.slots()\n        if slots is None:\n            return\n        # If any ancestor doesn't use slots, the slots\n        # defined for this class are superfluous.\n        if any(\n            \"__slots__\" not in ancestor.locals\n            and ancestor.name not in (\"Generic\", \"object\")\n            for ancestor in klass.ancestors()\n        ):\n            return\n\n        if not any(slot.value == node.attrname for slot in slots):\n            # If we have a '__dict__' in slots, then\n            # assigning any name is valid.\n            if not any(slot.value == \"__dict__\" for slot in slots):\n                if _is_attribute_property(node.attrname, klass):\n                    # Properties circumvent the slots mechanism,\n                    # so we should not emit a warning for them.\n                    return\n                if node.attrname != \"__class__\" and utils.is_class_attr(\n                    node.attrname, klass\n                ):\n                    return\n                if node.attrname in klass.locals:\n                    for local_name in klass.locals.get(node.attrname):\n                        statement = local_name.statement()\n                        if (\n                            isinstance(statement, nodes.AnnAssign)\n                            and not statement.value\n                        ):\n                            return\n                    if _has_data_descriptor(klass, node.attrname):\n                        # Descriptors circumvent the slots mechanism as well.\n                        return\n                if node.attrname == \"__class__\" and _has_same_layout_slots(\n                    slots, node.parent.value\n                ):\n                    return\n                self.add_message(\n                    \"assigning-non-slot\",\n                    args=(node.attrname,),\n                    node=node,\n                    confidence=INFERENCE,\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_8AHYZ0PJeYe9mLk2AS272933",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '470,500p' pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_8AHYZ0PJeYe9mLk2AS272933",
+     "content": "exit 0\n            continue\n        if isinstance(inferred, nodes.FunctionDef) and decorated_with_property(\n            inferred\n        ):\n            return True\n        if inferred.pytype() == property_name:\n            return True\n    return False\n\n\ndef _has_same_layout_slots(\n    slots: list[nodes.Const | None], assigned_value: nodes.Name\n) -> bool:\n    inferred = next(assigned_value.infer())\n    if isinstance(inferred, nodes.ClassDef):\n        other_slots = inferred.slots()\n        if all(\n            first_slot and second_slot and first_slot.value == second_slot.value\n            for (first_slot, second_slot) in zip_longest(slots, other_slots)\n        ):\n            return True\n    return False\n\n\nMSGS: dict[str, MessageDefinitionTuple] = {\n    \"F0202\": (\n        \"Unable to check methods signature (%s / %s)\",\n        \"method-check-failed\",\n        \"Used when Pylint has been unable to check methods signature \"\n        \"compatibility for an unexpected reason. Please report this kind \"\n        \"if you don't make sense of it.\",\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_LvhycFQ9tOrENOIpBuJi4297",
+     "name": "edit_file",
+     "arguments": {
+      "path": "/testbed/pylint/checkers/classes/class_checker.py",
+      "old": "def _has_same_layout_slots(\n    slots: list[nodes.Const | None], assigned_value: nodes.Name\n) -> bool:\n    inferred = next(assigned_value.infer())\n    if isinstance(inferred, nodes.ClassDef):\n        other_slots = inferred.slots()\n        if all(\n            first_slot and second_slot and first_slot.value == second_slot.value\n            for (first_slot, second_slot) in zip_longest(slots, other_slots)\n        ):\n            return True\n    return False\n",
+      "new": "def _has_same_layout_slots(\n    slots: list[nodes.Const | None], assigned_value: nodes.NodeNG\n) -> bool:\n    try:\n        inferred = next(assigned_value.infer())\n    except astroid.InferenceError:\n        return False\n    if isinstance(inferred, nodes.ClassDef):\n        other_slots = inferred.slots()\n        if all(\n            first_slot and second_slot and first_slot.value == second_slot.value\n            for (first_slot, second_slot) in zip_longest(slots, other_slots)\n        ):\n            return True\n    return False\n\n\ndef _get_assigned_value(node: nodes.AssignAttr) -> nodes.NodeNG | None:\n    \"\"\"Return the expression assigned to an AssignAttr target, if any.\n\n    Returns None when the assigned value cannot be pinpointed from the syntax,\n    for example when the target is a ``for`` loop, ``with`` statement,\n    comprehension or annotation target, or when unpacking from a RHS that is not\n    a literal tuple.\n    \"\"\"\n    target: nodes.NodeNG = node\n    indices: list[int] = []\n    while isinstance(target.parent, nodes.Tuple):\n        indices.append(target.parent.elts.index(target))\n        target = target.parent\n    if isinstance(target.parent, nodes.Assign):\n        value = target.parent.value\n    elif isinstance(target.parent, nodes.AnnAssign):\n        value = target.parent.value\n    else:\n        return None\n    if value is None:\n        return None\n    for index in reversed(indices):\n        if not isinstance(value, nodes.Tuple):\n            return None\n        try:\n            value = value.elts[index]\n        except IndexError:\n            return None\n    return value\n"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_LvhycFQ9tOrENOIpBuJi4297",
+     "content": "edited /testbed/pylint/checkers/classes/class_checker.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_liaHsRLv9TLNsB2LuGDo9524",
+     "name": "edit_file",
+     "arguments": {
+      "new": "    def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n        if not node.attrname == \"__class__\":\n            return\n        assigned_value = _get_assigned_value(node)\n        if assigned_value is None:\n            # We cannot determine the assigned value (e.g. target of a for\n            # loop, with statement, comprehension, or an annotation without a\n            # value), so we stay quiet like other uninferable cases.\n            return\n        inferred = safe_infer(assigned_value)\n        match inferred:\n            case nodes.ClassDef() | util.UninferableBase() | None:\n                # If uninferable, we allow it to prevent false positives\n                return\n        self.add_message(\n            \"invalid-class-object\",\n            node=node,\n            args=inferred.__class__.__name__,\n            confidence=INFERENCE,\n        )\n",
+      "old": "    def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n        if not node.attrname == \"__class__\":\n            return\n        if isinstance(node.parent, nodes.Tuple):\n            class_index = -1\n            for i, elt in enumerate(node.parent.elts):\n                if hasattr(elt, \"attrname\") and elt.attrname == \"__class__\":\n                    class_index = i\n            if class_index == -1:\n                # This should not happen because we checked that the node name\n                # is '__class__' earlier, but let's not be too confident here\n                return  # pragma: no cover\n            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n        else:\n            inferred = safe_infer(node.parent.value)\n        match inferred:\n            case nodes.ClassDef() | util.UninferableBase() | None:\n                # If uninferable, we allow it to prevent false positives\n                return\n        self.add_message(\n            \"invalid-class-object\",\n            node=node,\n            args=inferred.__class__.__name__,\n            confidence=INFERENCE,\n        )\n",
+      "path": "/testbed/pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_liaHsRLv9TLNsB2LuGDo9524",
+     "content": "edited /testbed/pylint/checkers/classes/class_checker.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "text",
+     "text": "Now update `_check_in_slots`:"
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_ONNhqEHNCckSfsAvNYC16096",
+     "name": "edit_file",
+     "arguments": {
+      "new": "                if node.attrname == \"__class__\":\n                    assigned_value = _get_assigned_value(node)\n                    if assigned_value is None or _has_same_layout_slots(\n                        slots, assigned_value\n                    ):\n                        return\n",
+      "old": "                if node.attrname == \"__class__\" and _has_same_layout_slots(\n                    slots, node.parent.value\n                ):\n                    return\n",
+      "path": "/testbed/pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_ONNhqEHNCckSfsAvNYC16096",
+     "content": "edited /testbed/pylint/checkers/classes/class_checker.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_dzhyqdIe54dtb3jqk4lJ4819",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '480,545p' pylint/checkers/classes/class_checker.py"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_vZku7uNRB7N3dBytIe6p8210",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '1740,1850p' pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_dzhyqdIe54dtb3jqk4lJ4819",
+     "content": "exit 0\ndef _has_same_layout_slots(\n    slots: list[nodes.Const | None], assigned_value: nodes.NodeNG\n) -> bool:\n    try:\n        inferred = next(assigned_value.infer())\n    except astroid.InferenceError:\n        return False\n    if isinstance(inferred, nodes.ClassDef):\n        other_slots = inferred.slots()\n        if all(\n            first_slot and second_slot and first_slot.value == second_slot.value\n            for (first_slot, second_slot) in zip_longest(slots, other_slots)\n        ):\n            return True\n    return False\n\n\ndef _get_assigned_value(node: nodes.AssignAttr) -> nodes.NodeNG | None:\n    \"\"\"Return the expression assigned to an AssignAttr target, if any.\n\n    Returns None when the assigned value cannot be pinpointed from the syntax,\n    for example when the target is a ``for`` loop, ``with`` statement,\n    comprehension or annotation target, or when unpacking from a RHS that is not\n    a literal tuple.\n    \"\"\"\n    target: nodes.NodeNG = node\n    indices: list[int] = []\n    while isinstance(target.parent, nodes.Tuple):\n        indices.append(target.parent.elts.index(target))\n        target = target.parent\n    if isinstance(target.parent, nodes.Assign):\n        value = target.parent.value\n    elif isinstance(target.parent, nodes.AnnAssign):\n        value = target.parent.value\n    else:\n        return None\n    if value is None:\n        return None\n    for index in reversed(indices):\n        if not isinstance(value, nodes.Tuple):\n            return None\n        try:\n            value = value.elts[index]\n        except IndexError:\n            return None\n    return value\n\n\nMSGS: dict[str, MessageDefinitionTuple] = {\n    \"F0202\": (\n        \"Unable to check methods signature (%s / %s)\",\n        \"method-check-failed\",\n        \"Used when Pylint has been unable to check methods signature \"\n        \"compatibility for an unexpected reason. Please report this kind \"\n        \"if you don't make sense of it.\",\n    ),\n    \"E0202\": (\n        \"An attribute defined in %s line %s hides this method\",\n        \"method-hidden\",\n        \"Used when a class defines a method which is hidden by an \"\n        \"instance attribute from an ancestor class or set by some \"\n        \"client code.\",\n    ),\n    \"E0203\": (\n        \"Access to member %r before its definition line %s\",\n        \"access-member-before-definition\",\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_vZku7uNRB7N3dBytIe6p8210",
+     "content": "exit 0\n        if not self.linter.is_message_enabled(\"protected-access\"):\n            return\n\n        self._check_protected_attribute_access(node)\n\n    def _check_super_without_brackets(self, node: nodes.Attribute) -> None:\n        \"\"\"Check if there is a function call on a super call without brackets.\"\"\"\n        # Check if attribute call is in frame definition in class definition\n        frame = node.frame()\n        if not isinstance(frame, nodes.FunctionDef):\n            return\n        if not isinstance(frame.parent.frame(), nodes.ClassDef):\n            return\n        if not isinstance(node.parent, nodes.Call):\n            return\n        if not isinstance(node.expr, nodes.Name):\n            return\n        if node.expr.name == \"super\":\n            self.add_message(\"super-without-brackets\", node=node.expr, confidence=HIGH)\n\n    @only_required_for_messages(\n        \"assigning-non-slot\", \"invalid-class-object\", \"access-member-before-definition\"\n    )\n    def visit_assignattr(self, node: nodes.AssignAttr) -> None:\n        if isinstance(\n            node.assign_type(), nodes.AugAssign\n        ) and self._uses_mandatory_method_param(node):\n            self._accessed.set_accessed(node)\n        self._check_in_slots(node)\n        self._check_invalid_class_object(node)\n\n    def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n        if not node.attrname == \"__class__\":\n            return\n        assigned_value = _get_assigned_value(node)\n        if assigned_value is None:\n            # We cannot determine the assigned value (e.g. target of a for\n            # loop, with statement, comprehension, or an annotation without a\n            # value), so we stay quiet like other uninferable cases.\n            return\n        inferred = safe_infer(assigned_value)\n        match inferred:\n            case nodes.ClassDef() | util.UninferableBase() | None:\n                # If uninferable, we allow it to prevent false positives\n                return\n        self.add_message(\n            \"invalid-class-object\",\n            node=node,\n            args=inferred.__class__.__name__,\n            confidence=INFERENCE,\n        )\n\n    def _check_in_slots(self, node: nodes.AssignAttr) -> None:\n        \"\"\"Check that the given AssignAttr node\n        is defined in the class slots.\n        \"\"\"\n        inferred = safe_infer(node.expr)\n        if not isinstance(inferred, astroid.Instance):\n            return\n\n        klass = inferred._proxied\n        if not has_known_bases(klass):\n            return\n        if \"__slots__\" not in klass.locals:\n            return\n        # If `__setattr__` is defined on the class, then we can't reason about\n        # what will happen when assigning to an attribute.\n        if any(\n            base.locals.get(\"__setattr__\")\n            for base in klass.mro()\n            if base.qname() != \"builtins.object\"\n        ):\n            return\n\n        # If 'typing.Generic' is a base of bases of klass, the cached version\n        # of 'slots()' might have been evaluated incorrectly, thus deleted cache entry.\n        if any(base.qname() == \"typing.Generic\" for base in klass.mro()):\n            cache = getattr(klass, \"__cache\", None)\n            if cache and cache.get(klass.slots) is not None:\n                del cache[klass.slots]\n\n        slots = klass.slots()\n        if slots is None:\n            return\n        # If any ancestor doesn't use slots, the slots\n        # defined for this class are superfluous.\n        if any(\n            \"__slots__\" not in ancestor.locals\n            and ancestor.name not in (\"Generic\", \"object\")\n            for ancestor in klass.ancestors()\n        ):\n            return\n\n        if not any(slot.value == node.attrname for slot in slots):\n            # If we have a '__dict__' in slots, then\n            # assigning any name is valid.\n            if not any(slot.value == \"__dict__\" for slot in slots):\n                if _is_attribute_property(node.attrname, klass):\n                    # Properties circumvent the slots mechanism,\n                    # so we should not emit a warning for them.\n                    return\n                if node.attrname != \"__class__\" and utils.is_class_attr(\n                    node.attrname, klass\n                ):\n                    return\n                if node.attrname in klass.locals:\n                    for local_name in klass.locals.get(node.attrname):\n                        statement = local_name.statement()\n                        if (\n                            isinstance(statement, nodes.AnnAssign)\n                            and not statement.value\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_5Kd82sYif7Eg6xdziTaN9637",
+     "name": "write_file",
+     "arguments": {
+      "content": "class Foo:\n    pass\n\n\ndef f(foo, ctx, x, a, y):\n    for foo.__class__ in [Foo]:\n        pass\n    with ctx as foo.__class__:\n        pass\n    [0 for foo.__class__ in [Foo]]\n    foo.__class__: type\n    foo.__class__, x = get_pair()\n    for foo.__class__, x in [(Foo, 1)]:\n        pass\n    (a.x, foo.__class__), y = (1, Foo), 2\n    x, foo.__class__ = (Foo,)\n",
+      "path": "/tmp/crash_cases.py"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_N8xWZa9rJyUIIUUE3GnZ5300",
+     "name": "write_file",
+     "arguments": {
+      "content": "class A:\n    __slots__ = [\"x\"]\n\n\nclass B:\n    __slots__ = [\"x\"]\n\n\ndef f():\n    inst = A()\n    for inst.__class__ in [B]:\n        pass\n    inst.__class__, y = B, 1\n    inst.__class__ = UndefinedName\n    with ctx as inst.__class__:\n        pass\n    inst.__class__: type\n",
+      "path": "/tmp/crash_slots.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_5Kd82sYif7Eg6xdziTaN9637",
+     "content": "wrote 355 bytes to /tmp/crash_cases.py",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_N8xWZa9rJyUIIUUE3GnZ5300",
+     "content": "wrote 268 bytes to /tmp/crash_slots.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_f8vriZBiM6pOO5Zc0OAj9989",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot crash_cases.py crash_slots.py 2>&1 | tail -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_f8vriZBiM6pOO5Zc0OAj9989",
+     "content": "exit 0\nException on node <AssignAttr.__class__ l.6 at 0xffff851ad010> in file '/tmp/crash_cases.py'\nTraceback (most recent call last):\n  File \"/opt/venv/lib/python3.12/site-packages/pylint/utils/ast_walker.py\", line 87, in walk\n    callback(astroid)\n  File \"/opt/venv/lib/python3.12/site-packages/pylint/checkers/classes/class_checker.py\", line 1735, in visit_assignattr\n    self._check_invalid_class_object(node)\n  File \"/opt/venv/lib/python3.12/site-packages/pylint/checkers/classes/class_checker.py\", line 1751, in _check_invalid_class_object\n    inferred = safe_infer(node.parent.value)\n                          ^^^^^^^^^^^^^^^^^\nAttributeError: 'For' object has no attribute 'value'\n************* Module crash_cases\ncrash_cases.py:1:0: F0002: crash_cases.py: Fatal error while checking 'crash_cases.py'. Please open an issue in our bug tracker so we address this. There is a pre-filled template that you can use in '/root/.cache/pylint/pylint-crash-2026-09-03-12-46-25.txt'. (astroid-error)\n************* Module crash_slots\ncrash_slots.py:1:0: F0002: crash_slots.py: Fatal error while checking 'crash_slots.py'. Please open an issue in our bug tracker so we address this. There is a pre-filled template that you can use in '/root/.cache/pylint/pylint-crash-2026-09-03-12-46-25.txt'. (astroid-error)\n\n-----------------------------------\nYour code has been rated at 0.00/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_Ecn5XaLDFcbi93IzUrsm3550",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot /tmp/crash_cases.py /tmp/crash_slots.py 2>&1 | tail -40"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_Ecn5XaLDFcbi93IzUrsm3550",
+     "content": "exit 0\n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module text.py: Unable to find module for /testbed/pylint/reporters/text.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module reports_handler_mix_in.py: Unable to find module for /testbed/pylint/reporters/reports_handler_mix_in.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module collecting_reporter.py: Unable to find module for /testbed/pylint/reporters/collecting_reporter.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module base_reporter.py: Unable to find module for /testbed/pylint/reporters/base_reporter.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module json_reporter.py: Unable to find module for /testbed/pylint/reporters/json_reporter.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module progress_reporters.py: Unable to find module for /testbed/pylint/reporters/progress_reporters.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nTraceback (most recent call last):\n  File \"<frozen runpy>\", line 198, in _run_module_as_main\n  File \"<frozen runpy>\", line 88, in _run_code\n  File \"/testbed/pylint/__main__.py\", line 10, in <module>\n    pylint.run_pylint()\n  File \"/testbed/pylint/__init__.py\", line 34, in run_pylint\n    PylintRun(argv or sys.argv[1:])\n  File \"/testbed/pylint/lint/run.py\", line 178, in __init__\n    _config_initialization(\n  File \"/testbed/pylint/config/config_initialization.py\", line 120, in _config_initialization\n    for exc_name in linter.config.overgeneral_exceptions:\n                    ^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'Namespace' object has no attribute 'overgeneral_exceptions'\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_qWbGWRreZ5g3T8lVmMH95752",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && env | grep -i pylint; python - <<'EOF'\nfrom pylint.config import find_default_config_files\nimport os\nprint(os.getcwd())\nfor f in find_default_config_files():\n    print(\"config:\", f)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_qWbGWRreZ5g3T8lVmMH95752",
+     "content": "exit 0\n/testbed\nconfig: /testbed/pylintrc\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_qE1tpOA3LxFcinfeBwyW3968",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot crash_cases.py crash_slots.py 2>&1 | tail -40"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_qE1tpOA3LxFcinfeBwyW3968",
+     "content": "exit 0\n************* Module crash_slots\ncrash_slots.py:14:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\n\n------------------------------------------------------------------\nYour code has been rated at 8.15/10 (previous run: 0.00/10, +8.15)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_NS1VlaXhcMlUPM36h2ba1434",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot crash_cases.py crash_slots.py 2>&1 | head -40"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_NS1VlaXhcMlUPM36h2ba1434",
+     "content": "exit 0\n************* Module crash_slots\ncrash_slots.py:14:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\n\n------------------------------------------------------------------\nYour code has been rated at 8.15/10 (previous run: 8.15/10, +0.00)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_PQlDckJ29V3OY5cI3sO94035",
+     "name": "bash",
+     "arguments": {
+      "command": "nl -ba /tmp/crash_slots.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_PQlDckJ29V3OY5cI3sO94035",
+     "content": "exit 0\n     1\tclass A:\n     2\t    __slots__ = [\"x\"]\n     3\t\n     4\t\n     5\tclass B:\n     6\t    __slots__ = [\"x\"]\n     7\t\n     8\t\n     9\tdef f():\n    10\t    inst = A()\n    11\t    for inst.__class__ in [B]:\n    12\t        pass\n    13\t    inst.__class__, y = B, 1\n    14\t    inst.__class__ = UndefinedName\n    15\t    with ctx as inst.__class__:\n    16\t        pass\n    17\t    inst.__class__: type\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_Wsf7AXtVojw41eJOp6b19140",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls tests/ | head -30 && grep -rn \"def test_functional\" tests/test_functional.py | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_Wsf7AXtVojw41eJOp6b19140",
+     "content": "exit 0\n__pycache__\nbenchmark\ncheckers\nconfig\nconftest.py\ndata\nextensions\nfunctional\ninput\nlint\nmessage\nmessages\nprimer\npyreverse\nregrtest_data\nreporters\ntest_check_parallel.py\ntest_func.py\ntest_functional.py\ntest_functional_directories.py\ntest_import_graph.py\ntest_numversion.py\ntest_pragma_parser.py\ntest_pylint_runners.py\ntest_regr.py\ntest_self.py\ntest_similar.py\ntestutils\nutils\n55:def test_functional(test_file: FunctionalTestFile, pytestconfig: Config) -> None:\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_Rfb3qghzgS3TmNYAlzh63632",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest \"tests/test_functional.py::test_functional[tests/functional/i/invalid/invalid_class_object.py]\" -q 2>&1 | tail -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_Rfb3qghzgS3TmNYAlzh63632",
+     "content": "exit 0\nERROR: not found: /testbed/tests/test_functional.py::test_functional\n(no match in any of [<Module test_functional.py>])\n\n\nno tests ran in 0.06s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_d1E6BjQ5QSvwXYG6RQlO0931",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '40,80p' tests/test_functional.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_d1E6BjQ5QSvwXYG6RQlO0931",
+     "content": "exit 0\n\n@pytest.fixture\ndef revert_stateful_config_changes(linter: PyLinter) -> Iterator[PyLinter]:\n    yield linter\n    # Revert any stateful configuration changes.\n    MANAGER.brain[\"module_denylist\"] = set()\n    MANAGER.brain[\"prefer_stubs\"] = False\n\n\n@pytest.mark.usefixtures(\"revert_stateful_config_changes\")\n@pytest.mark.parametrize(\n    \"test_file\",\n    get_functional_test_files_from_directory(FUNCTIONAL_DIR),\n    ids=lambda x: x.base,\n)\ndef test_functional(test_file: FunctionalTestFile, pytestconfig: Config) -> None:\n    __tracebackhide__ = True  # pylint: disable=unused-variable\n    lint_test: LintModuleOutputUpdate | testutils.LintModuleTest\n    if UPDATE_FILE.exists():\n        lint_test = LintModuleOutputUpdate(test_file, pytestconfig)\n    else:\n        lint_test = testutils.LintModuleTest(test_file, pytestconfig)\n    lint_test.setUp()\n\n    if test_file.base in TEST_WITH_EXPECTED_DEPRECATION:\n        exception_type = SyntaxWarning if PY312_PLUS else DeprecationWarning\n        with pytest.warns(exception_type, match=\"invalid escape sequence\"):\n            lint_test.runTest()\n    else:\n        lint_test.runTest()\n\n\nif __name__ == \"__main__\":\n    if UPDATE_OPTION in sys.argv:\n        UPDATE_FILE.touch()\n        sys.argv.remove(UPDATE_OPTION)\n    try:\n        pytest.main(sys.argv)\n    finally:\n        if UPDATE_FILE.exists():\n            UPDATE_FILE.unlink()\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_CY8hI4d8F90gIrZyvhV59428",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/test_functional.py -q -k \"invalid_class_object or assigning_non_slot or assigning_non_slot_4509\" 2>&1 | tail -25"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_CY8hI4d8F90gIrZyvhV59428",
+     "content": "exit 0\n...                                                                      [100%]\n3 passed, 914 deselected in 0.30s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_xfgeb1ONqNpUQdSRUcBW8741",
+     "name": "write_file",
+     "arguments": {
+      "content": "# pylint: disable=missing-docstring,too-few-public-methods,invalid-name,unused-variable\nfrom collections import defaultdict\n\n\nclass A:\n    pass\n\n\nclass B:\n    pass\n\n\nclass C:\n    pass\n\n\nA.__class__ = B\nA.__class__ = 1  # [invalid-class-object]\nA.__class__ = defaultdict(str)  # [invalid-class-object]\n\n\nclass TupleTargets:\n    def plain_good(self):\n        self.__class__, x = B, 1\n\n    def plain_bad(self):\n        self.__class__, x = 1, 1  # [invalid-class-object]\n\n    def inverted_bad(self):\n        x, self.__class__ = 1, 1  # [invalid-class-object]\n\n    def nested_bad(self):\n        (self.x, self.__class__), y = (1, 1), 2  # [invalid-class-object]\n\n    def nested_good(self):\n        (self.x, self.__class__), y = (1, B), 2\n\n    def nested_good2(self):\n        (self.x, (self.y, self.__class__)), z = (1, (2, B)), 3\n\n    def nested_bad2(self):\n        (self.x, (self.y, self.__class__)), z = (1, (2, 3)), 3  # [invalid-class-object]\n\n    def from_call(self):\n        self.__class__, x = get_pair()\n\n    def short_rhs(self):\n        x, self.__class__ = (B,)\n\n\nclass Foo:\n    pass\n\n\ndef loops(foo, ctx, x, a, y):\n    for foo.__class__ in [Foo]:\n        pass\n    with ctx as foo.__class__:\n        pass\n    [0 for foo.__class__ in [Foo]]\n    foo.__class__: type\n    foo.__class__, x = get_pair()\n    for foo.__class__, x in [(Foo, 1)]:\n        pass\n    (a.x, foo.__class__), y = (1, Foo), 2\n    x, foo.__class__ = (Foo,)\n",
+      "path": "/tmp/ico_comprehensive.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_xfgeb1ONqNpUQdSRUcBW8741",
+     "content": "wrote 1426 bytes to /tmp/ico_comprehensive.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_CRbXoz080xtWGSb6K5KR8010",
+     "name": "write_file",
+     "arguments": {
+      "content": "# pylint: disable=missing-docstring,too-few-public-methods,invalid-name,unused-variable\nclass SlotsX:\n    __slots__ = [\"x\"]\n\n\nclass SlotsY:\n    __slots__ = [\"y\"]\n\n\nclass SlotsXY:\n    __slots__ = [\"x\", \"y\"]\n\n\ndef slots_tests():\n    inst = SlotsX()\n    inst.__class__ = SlotsX\n    inst.__class__ = SlotsY  # [assigning-non-slot]\n    inst.__class__ = 1  # [assigning-non-slot]\n    inst.__class__ = UnknownName  # [assigning-non-slot]\n    inst.__class__, other = SlotsX, 1\n    inst.__class__, other = SlotsY, 1  # [assigning-non-slot]\n    other, inst.__class__ = 1, SlotsX\n    other, inst.__class__ = 1, SlotsY  # [assigning-non-slot]\n    (inst.x, inst.__class__), y = (1, SlotsX), 2\n    (inst.x, inst.__class__), y = (1, SlotsY), 2  # [assigning-non-slot]\n    for inst.__class__ in [SlotsX]:\n        pass\n    with ctx as inst.__class__:\n        pass\n    inst.__class__: type\n    inst.__class__, other = get_pair()\n    x, inst.__class__ = (SlotsX,)\n    for inst.__class__, other in [(SlotsX, 1)]:\n        pass\n",
+      "path": "/tmp/slots_comprehensive.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_CRbXoz080xtWGSb6K5KR8010",
+     "content": "wrote 1006 bytes to /tmp/slots_comprehensive.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_Wh40zmsYGLj2X93Kd9me2052",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot ico_comprehensive.py slots_comprehensive.py 2>&1"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_Wh40zmsYGLj2X93Kd9me2052",
+     "content": "exit 2\n************* Module ico_comprehensive\nico_comprehensive.py:18:0: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Const' (invalid-class-object)\nico_comprehensive.py:19:0: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Instance' (invalid-class-object)\nico_comprehensive.py:27:8: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Const' (invalid-class-object)\nico_comprehensive.py:30:11: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Const' (invalid-class-object)\nico_comprehensive.py:33:17: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Const' (invalid-class-object)\nico_comprehensive.py:42:26: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Const' (invalid-class-object)\n************* Module slots_comprehensive\nslots_comprehensive.py:17:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\nslots_comprehensive.py:18:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\nslots_comprehensive.py:18:4: E0243: Invalid assignment to '__class__'. Should be a class definition but got a 'Const' (invalid-class-object)\nslots_comprehensive.py:19:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\nslots_comprehensive.py:21:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\nslots_comprehensive.py:23:11: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\nslots_comprehensive.py:25:13: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\n\n-----------------------------------\nYour code has been rated at 0.71/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_PjdYXpBRn7Agxc8B4DkY5299",
+     "name": "bash",
+     "arguments": {
+      "command": "nl -ba /tmp/slots_comprehensive.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_PjdYXpBRn7Agxc8B4DkY5299",
+     "content": "exit 0\n     1\t# pylint: disable=missing-docstring,too-few-public-methods,invalid-name,unused-variable\n     2\tclass SlotsX:\n     3\t    __slots__ = [\"x\"]\n     4\t\n     5\t\n     6\tclass SlotsY:\n     7\t    __slots__ = [\"y\"]\n     8\t\n     9\t\n    10\tclass SlotsXY:\n    11\t    __slots__ = [\"x\", \"y\"]\n    12\t\n    13\t\n    14\tdef slots_tests():\n    15\t    inst = SlotsX()\n    16\t    inst.__class__ = SlotsX\n    17\t    inst.__class__ = SlotsY  # [assigning-non-slot]\n    18\t    inst.__class__ = 1  # [assigning-non-slot]\n    19\t    inst.__class__ = UnknownName  # [assigning-non-slot]\n    20\t    inst.__class__, other = SlotsX, 1\n    21\t    inst.__class__, other = SlotsY, 1  # [assigning-non-slot]\n    22\t    other, inst.__class__ = 1, SlotsX\n    23\t    other, inst.__class__ = 1, SlotsY  # [assigning-non-slot]\n    24\t    (inst.x, inst.__class__), y = (1, SlotsX), 2\n    25\t    (inst.x, inst.__class__), y = (1, SlotsY), 2  # [assigning-non-slot]\n    26\t    for inst.__class__ in [SlotsX]:\n    27\t        pass\n    28\t    with ctx as inst.__class__:\n    29\t        pass\n    30\t    inst.__class__: type\n    31\t    inst.__class__, other = get_pair()\n    32\t    x, inst.__class__ = (SlotsX,)\n    33\t    for inst.__class__, other in [(SlotsX, 1)]:\n    34\t        pass\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_QJobGDtE9se6xFQfMdbf9408",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot crash_for.py 2>&1 | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_QJobGDtE9se6xFQfMdbf9408",
+     "content": "exit 0\n\n--------------------------------------------------------------------\nYour code has been rated at 10.00/10 (previous run: 0.00/10, +10.00)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_w7RDANdcJGexr6aKihYz9351",
+     "name": "bash",
+     "arguments": {
+      "command": "cat > /tmp/crash_for2.py <<'EOF'\nclass Foo:\n    pass\n\n\ndef f(foo):\n    for foo.__class__ in [1]:\n        pass\nEOF\ncd /tmp && PYTHONPATH=/testbed python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot crash_for2.py 2>&1 | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_w7RDANdcJGexr6aKihYz9351",
+     "content": "exit 0\n\n------------------------------------\nYour code has been rated at 10.00/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_4aw76JyirZfrDmfPjhOz1851",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls tests/checkers/classes/ 2>/dev/null; ls tests/checkers/ 2>/dev/null | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_4aw76JyirZfrDmfPjhOz1851",
+     "content": "exit 0\n__init__.py\nbase\nconftest.py\nunittest_base_checker.py\nunittest_deprecated.py\nunittest_design.py\nunittest_format.py\nunittest_imports.py\nunittest_misc.py\nunittest_non_ascii_name.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_EicW9yJQdMJYiYcgW1G93170",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls tests/checkers/base 2>/dev/null | head; find tests -name \"*class*\" -o -name \"*class_checker*\" | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_EicW9yJQdMJYiYcgW1G93170",
+     "content": "exit 0\nunittest_base.py\nunittest_multi_naming_style.py\nunittest_name_preset.py\ntests/pyreverse/data/classes_depth_limited_0.dot\ntests/pyreverse/data/classes_no_standalone.dot\ntests/pyreverse/data/classes_No_Name.html\ntests/pyreverse/data/classes_No_Name.vcg\ntests/pyreverse/data/classes_depth_limited_1.dot\ntests/pyreverse/data/classes_No_Name.mmd\ntests/pyreverse/data/classes_No_Name.dot\ntests/pyreverse/data/classes_type_check_imports.dot\ntests/pyreverse/data/classes_colorized.dot\ntests/pyreverse/data/classes_No_Name.puml\ntests/pyreverse/data/classes_colorized.puml\ntests/pyreverse/functional/class_diagrams\ntests/functional/r/regression/regression_properties_in_class_context.txt\ntests/functional/r/regression/regression_properties_in_class_context.py\ntests/functional/d/dataclass\ntests/functional/d/dataclass/dataclass_with_default_factory.py\ntests/functional/d/dataclass/dataclass_with_default_factory.txt\ntests/functional/d/dataclass/dataclass_typecheck.py\ntests/functional/d/dataclass/dataclass_parameter.py\ntests/functional/d/dataclass/dataclass_py312.rc\ntests/functional/d/dataclass/dataclass_kw_only.txt\ntests/functional/d/dataclass/dataclass_py312.py\ntests/functional/d/dataclass/dataclass_kw_only.py\ntests/functional/d/dataclass/dataclass_with_field.txt\ntests/functional/d/dataclass/dataclass_with_field.py\ntests/functional/d/dataclass/dataclass_typecheck.txt\ntests/functional/d/deprecated/deprecated_class_py33.py\ntests/functional/d/deprecated/deprecated_class_sys_guard.rc\ntests/functional/d/deprecated/deprecated_class_py33.rc\ntests/functional/d/deprecated/deprecated_class_sys_guard.txt\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_a6iYbXKjO6d23HjsQU109262",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && find tests -name \"*class*.py\" | grep -v functional | head -20; find tests/checkers -name \"*.py\" | xargs grep -ln \"ClassChecker\\|_check_in_slots\\|invalid_class_object\\|assigning_non_slot\" 2>/dev/null"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_a6iYbXKjO6d23HjsQU109262",
+     "content": "exit 123\ntests/regrtest_data/classdoc_usage.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_mkXX8JSkh1lDqGIvp74O5802",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/test_functional.py -q -p no:cacheprovider 2>&1 | tail -8",
+      "timeout": 600
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_mkXX8JSkh1lDqGIvp74O5802",
+     "content": "exit 0\n...............................................s........................ [ 54%]\n.................s....................s................................. [ 62%]\n............................................s................s.......... [ 70%]\n..s...........................................s..ss..................... [ 78%]\n..........................s.....s.....s................................. [ 86%]\n......sss.................s............................................. [ 94%]\n.s......s...............s.....................s......                    [100%]\n887 passed, 30 skipped in 19.05s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_9SySS4zGanLRe1FnJiLg5643",
+     "name": "bash",
+     "arguments": {
+      "command": "python - <<'EOF'\nimport astroid\nfrom astroid import nodes\nfor code in [\n    \"foo.__class__, *x = Foo, [1]\\n\",\n    \"x, *foo.__class__ = 1, [Foo]\\n\",\n]:\n    print('===', repr(code))\n    try:\n        m = astroid.parse(code)\n    except Exception as e:\n        print('parse err', e)\n        continue\n    for n in m.nodes_of_class(nodes.AssignAttr):\n        print('assignattr parent', type(n.parent).__name__)\n        p = n.parent\n        while p:\n            print('   ', type(p).__name__)\n            p = p.parent\n            if p is m or p is None: break\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_9SySS4zGanLRe1FnJiLg5643",
+     "content": "exit 0\n=== 'foo.__class__, *x = Foo, [1]\\n'\nassignattr parent Tuple\n    Tuple\n    Assign\n=== 'x, *foo.__class__ = 1, [Foo]\\n'\nassignattr parent Starred\n    Starred\n    Tuple\n    Assign\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_wn1h9Z6GqLIk1QWZ9Tyn2593",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -c \"import pylint.checkers.classes.class_checker as c; print('import ok')\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_wn1h9Z6GqLIk1QWZ9Tyn2593",
+     "content": "exit 0\nimport ok\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_wb9WSf1wjCtCGM1KIzl99608",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls .pre-commit-config.yaml pyproject.toml | head; grep -n \"line-length\\|line_length\" pyproject.toml | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_wb9WSf1wjCtCGM1KIzl99608",
+     "content": "exit 0\n.pre-commit-config.yaml\npyproject.toml\n118:line-length = 115\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_9Lit6vWOKbMLC38GtXkt9438",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m black --check pylint/checkers/classes/class_checker.py 2>&1 | tail -3 || true"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_9Lit6vWOKbMLC38GtXkt9438",
+     "content": "exit 0\n/opt/venv/bin/python: No module named black\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_lSE78Pw880nt87CFqDoS7192",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m ruff check pylint/checkers/classes/class_checker.py 2>&1 | tail -20 || true"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_lSE78Pw880nt87CFqDoS7192",
+     "content": "exit 0\n/opt/venv/bin/python: No module named ruff\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_xDLvOKOb8F91uKnL3OFS7112",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git diff"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_xDLvOKOb8F91uKnL3OFS7112",
+     "content": "exit 0\ndiff --git a/pylint/checkers/classes/class_checker.py b/pylint/checkers/classes/class_checker.py\nindex b23045907..aa0470606 100644\n--- a/pylint/checkers/classes/class_checker.py\n+++ b/pylint/checkers/classes/class_checker.py\n@@ -478,9 +478,12 @@ def _is_attribute_property(name: str, klass: nodes.ClassDef) -> bool:\n \n \n def _has_same_layout_slots(\n-    slots: list[nodes.Const | None], assigned_value: nodes.Name\n+    slots: list[nodes.Const | None], assigned_value: nodes.NodeNG\n ) -> bool:\n-    inferred = next(assigned_value.infer())\n+    try:\n+        inferred = next(assigned_value.infer())\n+    except astroid.InferenceError:\n+        return False\n     if isinstance(inferred, nodes.ClassDef):\n         other_slots = inferred.slots()\n         if all(\n@@ -491,6 +494,37 @@ def _has_same_layout_slots(\n     return False\n \n \n+def _get_assigned_value(node: nodes.AssignAttr) -> nodes.NodeNG | None:\n+    \"\"\"Return the expression assigned to an AssignAttr target, if any.\n+\n+    Returns None when the assigned value cannot be pinpointed from the syntax,\n+    for example when the target is a ``for`` loop, ``with`` statement,\n+    comprehension or annotation target, or when unpacking from a RHS that is not\n+    a literal tuple.\n+    \"\"\"\n+    target: nodes.NodeNG = node\n+    indices: list[int] = []\n+    while isinstance(target.parent, nodes.Tuple):\n+        indices.append(target.parent.elts.index(target))\n+        target = target.parent\n+    if isinstance(target.parent, nodes.Assign):\n+        value = target.parent.value\n+    elif isinstance(target.parent, nodes.AnnAssign):\n+        value = target.parent.value\n+    else:\n+        return None\n+    if value is None:\n+        return None\n+    for index in reversed(indices):\n+        if not isinstance(value, nodes.Tuple):\n+            return None\n+        try:\n+            value = value.elts[index]\n+        except IndexError:\n+            return None\n+    return value\n+\n+\n MSGS: dict[str, MessageDefinitionTuple] = {\n     \"F0202\": (\n         \"Unable to check methods signature (%s / %s)\",\n@@ -1737,18 +1771,13 @@ a metaclass class method.\",\n     def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n         if not node.attrname == \"__class__\":\n             return\n-        if isinstance(node.parent, nodes.Tuple):\n-            class_index = -1\n-            for i, elt in enumerate(node.parent.elts):\n-                if hasattr(elt, \"attrname\") and elt.attrname == \"__class__\":\n-                    class_index = i\n-            if class_index == -1:\n-                # This should not happen because we checked that the node name\n-                # is '__class__' earlier, but let's not be too confident here\n-                return  # pragma: no cover\n-            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n-        else:\n-            inferred = safe_infer(node.parent.value)\n+        assigned_value = _get_assigned_value(node)\n+        if assigned_value is None:\n+            # We cannot determine the assigned value (e.g. target of a for\n+            # loop, with statement, comprehension, or an annotation without a\n+            # value), so we stay quiet like other uninferable cases.\n+            return\n+        inferred = safe_infer(assigned_value)\n         match inferred:\n             case nodes.ClassDef() | util.UninferableBase() | None:\n                 # If uninferable, we allow it to prevent false positives\n@@ -1824,10 +1853,12 @@ a metaclass class method.\",\n                     if _has_data_descriptor(klass, node.attrname):\n                         # Descriptors circumvent the slots mechanism as well.\n                         return\n-                if node.attrname == \"__class__\" and _has_same_layout_slots(\n-                    slots, node.parent.value\n-                ):\n-                    return\n+                if node.attrname == \"__class__\":\n+                    assigned_value = _get_assigned_value(node)\n+                    if assigned_value is None or _has_same_layout_slots(\n+                        slots, assigned_value\n+                    ):\n+                        return\n                 self.add_message(\n                     \"assigning-non-slot\",\n                     args=(node.attrname,),\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_h6SIaELhyHidlDIUgSbe3247",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/checkers -q -p no:cacheprovider 2>&1 | tail -8",
+      "timeout": 300
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_h6SIaELhyHidlDIUgSbe3247",
+     "content": "exit 0\ns....................................................................... [ 15%]\n..........................x...ssssssssssssssssssssssssssssssssssssssssss [ 31%]\n..............................s......................................... [ 47%]\n........................................................................ [ 63%]\n........................................................................ [ 79%]\n................xx........x............................................. [ 95%]\n......................                                                   [100%]\n406 passed, 44 skipped, 4 xfailed in 1.70s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_X2OGQqS1FckptqrmHYgN0936",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git status --short"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_795l2pRz6fRpBJS8ZdbC4514",
+     "name": "bash",
+     "arguments": {
+      "command": "rm -f /tmp/crash_for.py /tmp/crash_for2.py /tmp/crash_cases.py /tmp/crash_slots.py /tmp/ico_comprehensive.py /tmp/slots_comprehensive.py && rm -rf /tmp/.pylint.d && echo cleaned"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_X2OGQqS1FckptqrmHYgN0936",
+     "content": "exit 0\n M pylint/checkers/classes/class_checker.py\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_795l2pRz6fRpBJS8ZdbC4514",
+     "content": "exit 0\ncleaned\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_PvmHtbTX1vAY9jq6cCWu2885",
+     "name": "bash",
+     "arguments": {
+      "command": "cat > /tmp/pr_all.py <<'EOF'\nclass Foo:\n    pass\n\nclass A:\n    __slots__ = [\"x\"]\n\nclass B:\n    __slots__ = [\"x\"]\n\ndef f(foo, ctx, x, y, inst):\n    for foo.__class__ in [Foo]:\n        pass\n    with ctx as foo.__class__:\n        pass\n    [0 for foo.__class__ in [Foo]]\n    foo.__class__: type\n    foo.__class__, x = get_pair()\n    for foo.__class__, x in [(Foo, 1)]:\n        pass\n    (x.foo, foo.__class__), y = (1, Foo), 2\n    x, foo.__class__ = (Foo,)\n    inst = A()\n    for inst.__class__ in [B]:\n        pass\n    inst.__class__, y = B, 1\n    inst.__class__ = UndefinedName\nEOF\ncd /tmp && PYTHONPATH=/testbed python -m pylint --rcfile=/dev/null --disable=all --enable=invalid-class-object,assigning-non-slot pr_all.py 2>&1\nrm -f /tmp/pr_all.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_PvmHtbTX1vAY9jq6cCWu2885",
+     "content": "exit 0\n************* Module pr_all\npr_all.py:26:4: E0237: Assigning to attribute '__class__' not defined in class slots (assigning-non-slot)\n\n-----------------------------------\nYour code has been rated at 7.83/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_a5wcUFM2m03h8J42xDoe7382",
+     "name": "edit_file",
+     "arguments": {
+      "new": "    Returns None when the assigned value cannot be pinpointed from the syntax,\n    for example when the target is a ``for`` loop, ``with`` statement,\n    comprehension or annotation-without-value target, or when unpacking from a\n    RHS that is not a literal tuple.\n",
+      "old": "    Returns None when the assigned value cannot be pinpointed from the syntax,\n    for example when the target is a ``for`` loop, ``with`` statement,\n    comprehension or annotation target, or when unpacking from a RHS that is not\n    a literal tuple.\n",
+      "path": "/testbed/pylint/checkers/classes/class_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_a5wcUFM2m03h8J42xDoe7382",
+     "content": "edited /testbed/pylint/checkers/classes/class_checker.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_GOt3kTZ3EIvN7XWIDlbm6909",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/test_functional.py -q -p no:cacheprovider -k \"invalid_class_object or assigning_non_slot\" 2>&1 | tail -5"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_GOt3kTZ3EIvN7XWIDlbm6909",
+     "content": "exit 0\n...                                                                      [100%]\n3 passed, 914 deselected in 0.35s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_EhEJvU77Cl0X6b1JuPyI4247",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m py_compile pylint/checkers/classes/class_checker.py && git diff"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_EhEJvU77Cl0X6b1JuPyI4247",
+     "content": "exit 0\ndiff --git a/pylint/checkers/classes/class_checker.py b/pylint/checkers/classes/class_checker.py\nindex b23045907..223379aef 100644\n--- a/pylint/checkers/classes/class_checker.py\n+++ b/pylint/checkers/classes/class_checker.py\n@@ -478,9 +478,12 @@ def _is_attribute_property(name: str, klass: nodes.ClassDef) -> bool:\n \n \n def _has_same_layout_slots(\n-    slots: list[nodes.Const | None], assigned_value: nodes.Name\n+    slots: list[nodes.Const | None], assigned_value: nodes.NodeNG\n ) -> bool:\n-    inferred = next(assigned_value.infer())\n+    try:\n+        inferred = next(assigned_value.infer())\n+    except astroid.InferenceError:\n+        return False\n     if isinstance(inferred, nodes.ClassDef):\n         other_slots = inferred.slots()\n         if all(\n@@ -491,6 +494,37 @@ def _has_same_layout_slots(\n     return False\n \n \n+def _get_assigned_value(node: nodes.AssignAttr) -> nodes.NodeNG | None:\n+    \"\"\"Return the expression assigned to an AssignAttr target, if any.\n+\n+    Returns None when the assigned value cannot be pinpointed from the syntax,\n+    for example when the target is a ``for`` loop, ``with`` statement,\n+    comprehension or annotation-without-value target, or when unpacking from a\n+    RHS that is not a literal tuple.\n+    \"\"\"\n+    target: nodes.NodeNG = node\n+    indices: list[int] = []\n+    while isinstance(target.parent, nodes.Tuple):\n+        indices.append(target.parent.elts.index(target))\n+        target = target.parent\n+    if isinstance(target.parent, nodes.Assign):\n+        value = target.parent.value\n+    elif isinstance(target.parent, nodes.AnnAssign):\n+        value = target.parent.value\n+    else:\n+        return None\n+    if value is None:\n+        return None\n+    for index in reversed(indices):\n+        if not isinstance(value, nodes.Tuple):\n+            return None\n+        try:\n+            value = value.elts[index]\n+        except IndexError:\n+            return None\n+    return value\n+\n+\n MSGS: dict[str, MessageDefinitionTuple] = {\n     \"F0202\": (\n         \"Unable to check methods signature (%s / %s)\",\n@@ -1737,18 +1771,13 @@ a metaclass class method.\",\n     def _check_invalid_class_object(self, node: nodes.AssignAttr) -> None:\n         if not node.attrname == \"__class__\":\n             return\n-        if isinstance(node.parent, nodes.Tuple):\n-            class_index = -1\n-            for i, elt in enumerate(node.parent.elts):\n-                if hasattr(elt, \"attrname\") and elt.attrname == \"__class__\":\n-                    class_index = i\n-            if class_index == -1:\n-                # This should not happen because we checked that the node name\n-                # is '__class__' earlier, but let's not be too confident here\n-                return  # pragma: no cover\n-            inferred = safe_infer(node.parent.parent.value.elts[class_index])\n-        else:\n-            inferred = safe_infer(node.parent.value)\n+        assigned_value = _get_assigned_value(node)\n+        if assigned_value is None:\n+            # We cannot determine the assigned value (e.g. target of a for\n+            # loop, with statement, comprehension, or an annotation without a\n+            # value), so we stay quiet like other uninferable cases.\n+            return\n+        inferred = safe_infer(assigned_value)\n         match inferred:\n             case nodes.ClassDef() | util.UninferableBase() | None:\n                 # If uninferable, we allow it to prevent false positives\n@@ -1824,10 +1853,12 @@ a metaclass class method.\",\n                     if _has_data_descriptor(klass, node.attrname):\n                         # Descriptors circumvent the slots mechanism as well.\n                         return\n-                if node.attrname == \"__class__\" and _has_same_layout_slots(\n-                    slots, node.parent.value\n-                ):\n-                    return\n+                if node.attrname == \"__class__\":\n+                    assigned_value = _get_assigned_value(node)\n+                    if assigned_value is None or _has_same_layout_slots(\n+                        slots, assigned_value\n+                    ):\n+                        return\n                 self.add_message(\n                     \"assigning-non-slot\",\n                     args=(node.attrname,),\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "text",
+     "text": "The fix is complete. Here is a summary of what I changed and why.\n\n## Problem\n\nIn `pylint/checkers/classes/class_checker.py`, the `__class__` assignment checks (`_check_invalid_class_object` and `_check_in_slots` / `_has_same_layout_slots`) assumed that an `AssignAttr.__class__` target's parent is always a plain `Assign` (or a `Tuple` directly inside one) and unconditionally accessed `.parent.value` / `.parent.parent.value`. This crashed for legal-but-unusual targets such as:\n\n- `for foo.__class__ in [...]`\n- `with ctx as foo.__class__`\n- comprehensions\n- bare annotations (`foo.__class__: type`)\n- tuple unpacking from a non-literal RHS / nested tuples / short RHS tuples\n- unresolvable RHS names in the `__slots__` path (`NameInferenceError`)\n\n## Fix\n\n1. Added a module-level helper `_get_assigned_value(node)` that walks up from an `AssignAttr` target through nested `Tuple`s and returns the exact RHS expression assigned to it, but only when that value can be structurally pinpointed:\n   - supports plain `Assign` targets and `AnnAssign` targets with a value (following nested tuple indices into the RHS)\n   - returns `None` (unpinpointable) for `for`/`with`/comprehension targets, annotations without a value, unpacking from non-tuple RHS, RHS tuple too short, etc.\n\n2. `_check_invalid_class_object` now uses that helper. If the value can't be pinpointed, it stays quiet instead of crashing.\n\n3. `_check_in_slots` uses the helper for the `__class__` layout check; an unpinpointable value is treated conservatively (stays quiet / no crash), while a pinpointed value still goes through `_has_same_layout_slots`.\n\n4. `_has_same_layout_slots` now catches `astroid.InferenceError` and returns `False`, so `inst.__class__ = UndefinedName` no longer crashes and still emits `assigning-non-slot` (matching the existing behavior for `Uninferable`), and its type hint was widened from `nodes.Name` to `nodes.NodeNG`.\n\n## Verification\n\n- Reproduced the original `F0002` crash before the change, and confirmed all crash cases from the PR report now run without crashing.\n- Confirmed expected diagnostics are preserved/emitted correctly: existing `invalid-class-object` tuple/unpacking cases still fire, `assigning-non-slot` is emitted for same-layout/slot mismatches and for unresolvable names, while unpinpointable contexts stay quiet.\n- Ran the full functional test suite (`887 passed, 30 skipped`) and `tests/checkers` (`406 passed`), plus the specific `invalid_class_object` / `assigning_non_slot` functional tests."
+    }
+   ]
+  }
+ ]
+}

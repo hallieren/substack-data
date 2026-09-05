@@ -1,0 +1,3 @@
+[jsignell 2026-02-09] Thanks for pointing this out! This is a super old part of xarray (came in on https://github.com/pydata/xarray/pull/71) and there has been this discrepancy from the beginning. I can see why it would make sense to default to a shallow copy for Dataset (where you might just want to change the names of the variables or something) whereas for DataArray (where you are more likely to be manipulating the data) it makes sense to default to deep. So the current defaults might result in the fewest surprises for users.
+
+Since this would be a breaking change and it's not totally clear to me that the current behavior is more surprising than the proposed I am leaning towards not making this change.

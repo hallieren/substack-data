@@ -1,0 +1,11 @@
+{
+ "baseline_failing": [],
+ "post_failing": [],
+ "ref_apply": 0,
+ "ref_results": {
+  "tests/test_functional.py::test_functional[comparison_with_callable_typing_constants]": "PASSED",
+  "tests/test_functional.py::test_functional[comparison_with_callable]": "FAILED"
+ },
+ "patch": "diff --git a/pylint/checkers/base/comparison_checker.py b/pylint/checkers/base/comparison_checker.py\nindex 4867f8098..29bc1aa03 100644\n--- a/pylint/checkers/base/comparison_checker.py\n+++ b/pylint/checkers/base/comparison_checker.py\n@@ -282,8 +282,19 @@ class ComparisonChecker(_BasicChecker):\n             inferred = utils.safe_infer(operand)\n             # Ignore callables that raise, as well as typing constants\n             # implemented as functions (that raise via their decorator)\n-            if (\n-                isinstance(inferred, bare_callables)\n+            if not isinstance(inferred, bare_callables):\n+                continue\n+            # A BoundMethod can proxy a Lambda as well as a FunctionDef.\n+            # Unwrap the proxy so the Lambda-specific checks below can be used.\n+            if isinstance(inferred, astroid.BoundMethod):\n+                while isinstance(inferred, astroid.UnboundMethod):\n+                    inferred = inferred._proxied\n+            if isinstance(inferred, nodes.Lambda):\n+                # A Lambda cannot contain a Raise statement and cannot be\n+                # decorated, so it is always a bare callable here.\n+                number_of_bare_callables += 1\n+            elif (\n+                isinstance(inferred, nodes.FunctionDef)\n                 and \"typing._SpecialForm\" not in inferred.decoratornames()\n                 and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n             ):\n",
+ "status": "done"
+}

@@ -1,0 +1,2250 @@
+{
+ "trajectory_format": "pico-1",
+ "instance_id": "pylint-11175-r2",
+ "info": {
+  "exit_status": "done",
+  "submission": "diff --git a/pylint/checkers/base/comparison_checker.py b/pylint/checkers/base/comparison_checker.py\nindex 4867f8098..2a2d5b580 100644\n--- a/pylint/checkers/base/comparison_checker.py\n+++ b/pylint/checkers/base/comparison_checker.py\n@@ -280,11 +280,26 @@ class ComparisonChecker(_BasicChecker):\n         number_of_bare_callables = 0\n         for operand in left_operand, right_operand:\n             inferred = utils.safe_infer(operand)\n+            if not isinstance(inferred, bare_callables):\n+                continue\n+            if isinstance(inferred, astroid.BoundMethod):\n+                # A BoundMethod can proxy a Lambda (e.g. a lambda assigned as a\n+                # class attribute and accessed through an instance). Lambdas have\n+                # no `decoratornames()` and their body is a single expression\n+                # rather than a list of statements, so detect them via the\n+                # proxied node to avoid accessing those FunctionDef attributes.\n+                proxied = inferred._proxied\n+                while isinstance(\n+                    proxied, (astroid.BoundMethod, astroid.UnboundMethod)\n+                ):\n+                    proxied = proxied._proxied\n+                if isinstance(proxied, nodes.Lambda):\n+                    number_of_bare_callables += 1\n+                    continue\n             # Ignore callables that raise, as well as typing constants\n             # implemented as functions (that raise via their decorator)\n             if (\n-                isinstance(inferred, bare_callables)\n-                and \"typing._SpecialForm\" not in inferred.decoratornames()\n+                \"typing._SpecialForm\" not in inferred.decoratornames()\n                 and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n             ):\n                 number_of_bare_callables += 1\n",
+  "model_stats": {
+   "instance_cost": 0.024803,
+   "api_calls": 89,
+   "input_tokens": 31243,
+   "cache_read_tokens": 3325184,
+   "output_tokens": 39709
+  },
+  "config": {
+   "agent": "pico",
+   "harness": "ch13-replay",
+   "case": "pylint-11175",
+   "repeat": 2,
+   "world": "pico-world:pylint-11175",
+   "base_sha": "b7a1cbfddfabb688f205bb82999a45accebdae8c",
+   "network": "none",
+   "git_seal": "timesafe-v1",
+   "issue": "https://github.com/pylint-dev/pylint/issues/11175"
+  }
+ },
+ "messages": [
+  {
+   "role": "system",
+   "content": [
+    {
+     "kind": "text",
+     "text": "You are a software engineer fixing a real GitHub issue in the repository at /testbed.\n\nWork methodically: read the relevant code before editing it, reproduce the issue\nwith a small script or command first, make the smallest change that fixes the\ncause, then rerun your reproduction to verify. Also think about edge cases.\n\nRules:\n- Do not modify test files or configuration; fix the source.\n- Keep scratch work in /tmp. Delete any reproduction or helper files you\n  created under /testbed before you finish; they would pollute the submitted diff.\n- Prefer edit_file over write_file so changes stay small.\n- When you are done, summarize what you changed and why. Your final state of\n  /testbed will be submitted automatically as a git diff; there is no submit\n  command."
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "text",
+     "text": "<pr_description>\n# Crash (astroid-error) in comparison-with-callable when comparing a lambda assigned as a class attribute\n\n### Bug description\n\n`comparison-with-callable` crashes with an `astroid-error` (F0002) when one side of a comparison infers to a **lambda that was assigned as a class attribute** and is accessed through an instance (`self.attr` / `Instance().attr`), i.e. astroid infers it as a `BoundMethod` proxying a `Lambda`:\n\n```python\nclass C:\n    lam = lambda self: 1\n\n    def check(self):\n        return self.lam == 1   # crash\n```\n\n### Command used\n\n```shell\npylint --disable=all --enable=comparison-with-callable t.py\n```\n\n### Pylint output\n\n```\nException on node <Compare l.5 ...> in file 't.py'\nTraceback (most recent call last):\n  File \".../pylint/checkers/base/comparison_checker.py\", line 287, in _check_callable_comparison\n    and \"typing._SpecialForm\" not in inferred.decoratornames()\n                                     ^^^^^^^^^^^^^^^^^^^^^^^\n  File \".../astroid/bases.py\", line 146, in __getattr__\n    return getattr(self._proxied, name)\nAttributeError: 'Lambda' object has no attribute 'decoratornames'\n\nt.py:1:0: F0002: ... astroid-error ...\n```\n\n### Root cause\n\nIn `_check_callable_comparison` (`pylint/checkers/base/comparison_checker.py`):\n\n```python\nbare_callables = (nodes.FunctionDef, astroid.BoundMethod)\n...\nif (\n    isinstance(inferred, bare_callables)\n    and \"typing._SpecialForm\" not in inferred.decoratornames()   # <-- here\n    and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n):\n```\n\nFor `self.lam`, `safe_infer` returns a `BoundMethod` whose `_proxied` is a `Lambda`. It passes `isinstance(inferred, astroid.BoundMethod)`, but `decoratornames()` is defined on `FunctionDef`, **not** on `Lambda` (`hasattr(nodes.Lambda, \"decoratornames\")` is `False`), so the proxied attribute lookup raises `AttributeError`.\n\nThis is exactly the proxy pitfall called out in the repo's own `AGENTS.md` (\"a `BoundMethod` can wrap a `Lambda`, which has no `.decorators`\"). The `decoratornames()`/`.body` check was introduced in #11055.\n\n### Two things a fix should be careful about\n\n1. **A naive guard on `decoratornames()` alone still crashes on the next line.** `inferred.body` for a `Lambda` is a *single expression node*, not a list (`isinstance(nodes.Lambda(...).body, list)` is `False`, vs. `True` for `FunctionDef`), so `for x in inferred.body` would then raise `TypeError: '...' object is not iterable`.\n2. **Bare lambdas are currently a false negative.** `f = lambda: 1; f == 1` emits nothing, because a `Lambda` is not an instance of `nodes.FunctionDef` (in this astroid, `issubclass(nodes.FunctionDef, nodes.Lambda)` is `False`). If `comparison-with-callable` is meant to cover lambdas, that's a related gap worth deciding on in the same change.\n\nBecause (2) is a behaviour decision (should comparing a bare/bound lambda to a non-callable be flagged, or just not crash?), I'm raising this as an issue first rather than sending a PR straight away. Happy to submit the fix once you confirm the intended behaviour \u2014 I have a patch and functional-test cases drafted.\n\n### Pylint version\n\n```shell\npylint 4.1.0-dev0\nastroid 4.2.0b4\nPython 3.12.3\n```\n\n\n</pr_description>\n\nI've uploaded a python code repository in /testbed. Can you help me implement\nthe necessary changes to the repository so that the requirements specified in\nthe <pr_description> are met? Make minimal changes to non-test files in\n/testbed to fix the issue. The environment (dependencies, test runner) is\nalready set up."
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_UMSGqTeQXTx0jYKvJEUA4387",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline -5 && ls"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_WoYV2OUPEuBT9ofmcUAh5607",
+     "name": "read_file",
+     "arguments": {
+      "path": "/testbed/pylint/checkers/base/comparison_checker.py",
+      "offset": 240,
+      "limit": 120
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_UMSGqTeQXTx0jYKvJEUA4387",
+     "content": "exit 0\nb7a1cbfdd Fix deprecated-class for version-guarded imports (#11183)\n0f39f39e0 Fix protected-access false positive for self.__class__ (#11161)\n9242406e3 [pre-commit.ci] pre-commit autoupdate (#11182)\n30cb5a755 Bump actions/setup-python from 6.3.0 to 7.0.0 (#11181)\n5f7e4013c [pre-commit.ci] pre-commit autoupdate and manual fix (#11167)\nAGENTS.md\nCITATION.cff\nCODE_OF_CONDUCT.md\nCONTRIBUTORS.txt\nLICENSE\nMANIFEST.in\nREADME.rst\nbuild\ncodecov.yml\ncustom_dict.txt\ndoc\nexamples\npylint\npylint.egg-info\npylintrc\npyproject.toml\nrequirements_test.txt\nrequirements_test_min.txt\nrequirements_test_pre_commit.txt\nscript\ntbump.toml\ntests\ntowncrier.toml\ntox.ini\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_WoYV2OUPEuBT9ofmcUAh5607",
+     "content": "   240\t        ):\n   241\t            left_operand = left_operand.value\n   242\t            right_operand = right_operand.value\n   243\t        elif isinstance(left_operand, nodes.Name) and isinstance(\n   244\t            right_operand, nodes.Name\n   245\t        ):\n   246\t            left_operand = left_operand.name\n   247\t            right_operand = right_operand.name\n   248\t\n   249\t        if left_operand == right_operand:\n   250\t            suggestion = f\"{left_operand} {operator} {right_operand}\"\n   251\t            self.add_message(\"comparison-with-itself\", node=node, args=(suggestion,))\n   252\t\n   253\t    def _check_constants_comparison(self, node: nodes.Compare) -> None:\n   254\t        \"\"\"When two constants are being compared it is always a logical tautology.\"\"\"\n   255\t        left_operand = node.left\n   256\t        if not isinstance(left_operand, nodes.Const):\n   257\t            return\n   258\t\n   259\t        right_operand = node.ops[0][1]\n   260\t        if not isinstance(right_operand, nodes.Const):\n   261\t            return\n   262\t\n   263\t        operator = node.ops[0][0]\n   264\t        self.add_message(\n   265\t            \"comparison-of-constants\",\n   266\t            node=node,\n   267\t            args=(left_operand.as_string(), operator, right_operand.as_string()),\n   268\t            confidence=HIGH,\n   269\t        )\n   270\t\n   271\t    def _check_callable_comparison(self, node: nodes.Compare) -> None:\n   272\t        operator = node.ops[0][0]\n   273\t        if operator not in COMPARISON_OPERATORS:\n   274\t            return\n   275\t\n   276\t        bare_callables = (nodes.FunctionDef, astroid.BoundMethod)\n   277\t        left_operand, right_operand = node.left, node.ops[0][1]\n   278\t        # this message should be emitted only when there is comparison of bare callable\n   279\t        # with non bare callable.\n   280\t        number_of_bare_callables = 0\n   281\t        for operand in left_operand, right_operand:\n   282\t            inferred = utils.safe_infer(operand)\n   283\t            # Ignore callables that raise, as well as typing constants\n   284\t            # implemented as functions (that raise via their decorator)\n   285\t            if (\n   286\t                isinstance(inferred, bare_callables)\n   287\t                and \"typing._SpecialForm\" not in inferred.decoratornames()\n   288\t                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n   289\t            ):\n   290\t                number_of_bare_callables += 1\n   291\t        if number_of_bare_callables == 1:\n   292\t            self.add_message(\"comparison-with-callable\", node=node)\n   293\t\n   294\t    @utils.only_required_for_messages(\n   295\t        \"singleton-comparison\",\n   296\t        \"unidiomatic-typecheck\",\n   297\t        \"literal-comparison\",\n   298\t        \"comparison-with-itself\",\n   299\t        \"comparison-of-constants\",\n   300\t        \"comparison-with-callable\",\n   301\t        \"nan-comparison\",\n   302\t    )\n   303\t    def visit_compare(self, node: nodes.Compare) -> None:\n   304\t        self._check_callable_comparison(node)\n   305\t        self._check_logical_tautology(node)\n   306\t        self._check_unidiomatic_typecheck(node)\n   307\t        self._check_constants_comparison(node)\n   308\t        # NOTE: this checker only works with binary comparisons like 'x == 42'\n   309\t        # but not 'x == y == 42'\n   310\t        if len(node.ops) != 1:\n   311\t            return\n   312\t\n   313\t        left = node.left\n   314\t        operator, right = node.ops[0]\n   315\t\n   316\t        if operator in {\"==\", \"!=\"}:\n   317\t            self._check_singleton_comparison(\n   318\t                left, right, node, checking_for_absence=operator == \"!=\"\n   319\t            )\n   320\t\n   321\t        if operator in {\"==\", \"!=\", \"is\", \"is not\"}:\n   322\t            self._check_nan_comparison(\n   323\t                left, right, node, checking_for_absence=operator in {\"!=\", \"is not\"}\n   324\t            )\n   325\t        if operator in {\"is\", \"is not\"}:\n   326\t            self._check_literal_comparison(right, node)\n   327\t\n   328\t    def _check_unidiomatic_typecheck(self, node: nodes.Compare) -> None:\n   329\t        operator, right = node.ops[0]\n   330\t        if operator in TYPECHECK_COMPARISON_OPERATORS:\n   331\t            left = node.left\n   332\t            if _is_one_arg_pos_call(left):\n   333\t                self._check_type_x_is_y(node=node, left=left, right=right)\n   334\t            elif isinstance(left, nodes.Name) and _is_one_arg_pos_call(right):\n   335\t                # transforming Y == type(x) case to type(x) == Y\n   336\t                self._check_type_x_is_y(node=node, left=right, right=left)\n   337\t\n   338\t    def _check_type_x_is_y(\n   339\t        self, node: nodes.Compare, left: nodes.NodeNG, right: nodes.NodeNG\n   340\t    ) -> None:\n   341\t        \"\"\"Check for expressions like type(x) == Y.\"\"\"\n   342\t        left_func = utils.safe_infer(left.func)\n   343\t        if not (\n   344\t            isinstance(left_func, nodes.ClassDef) and left_func.qname() == TYPE_QNAME\n   345\t        ):\n   346\t            return\n   347\t\n   348\t        if _is_one_arg_pos_call(right):\n   349\t            right_func = utils.safe_infer(right.func)\n   350\t            if (\n   351\t                isinstance(right_func, nodes.ClassDef)\n   352\t                and right_func.qname() == TYPE_QNAME\n   353\t            ):\n   354\t                # type(x) == type(a)\n   355\t                right_arg = utils.safe_infer(right.args[0])\n   356\t                if not isinstance(right_arg, LITERAL_NODE_TYPES):\n   357\t                    # not e.g. type(x) == type([])\n   358\t                    return\n   359\t        self.add_message(\"unidiomatic-typecheck\", node=node)",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ljxtU2b3NoBtah9V9Vt56855",
+     "name": "write_file",
+     "arguments": {
+      "path": "/tmp/t.py",
+      "content": "class C:\n    lam = lambda self: 1\n\n    def check(self):\n        return self.lam == 1\n\n\ndef f():\n    return 1\n\n\nlam = lambda: 1\nprint(lam == 1)\nprint(f == 1)\n"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ljxtU2b3NoBtah9V9Vt56855",
+     "content": "wrote 157 bytes to /tmp/t.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_ynMSCOC50a6W38przi5c5180",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pylint --disable=all --enable=comparison-with-callable /tmp/t.py 2>&1 | head -40"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_ynMSCOC50a6W38przi5c5180",
+     "content": "exit 0\nProblem importing module modified_iterating_checker.py: Unable to find module for /testbed/pylint/checkers/modified_iterating_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module lambda_expressions.py: Unable to find module for /testbed/pylint/checkers/lambda_expressions.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module nested_min_max.py: Unable to find module for /testbed/pylint/checkers/nested_min_max.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module symilar.py: Unable to find module for /testbed/pylint/checkers/symilar.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module imports.py: Unable to find module for /testbed/pylint/checkers/imports.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module match_statements_checker.py: Unable to find module for /testbed/pylint/checkers/match_statements_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module base: Unable to find module for /testbed/pylint/checkers/base in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module logging.py: Unable to find module for /testbed/pylint/checkers/logging.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module newstyle.py: Unable to find module for /testbed/pylint/checkers/newstyle.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\nProblem importing module async_checker.py: Unable to find module for /testbed/pylint/checkers/async_checker.py in /usr/local/lib/python312.zip, \n/usr/local/lib/python3.12, \n/usr/local/lib/python3.12/lib-dynload, \n/opt/venv/lib/python3.12/site-packages\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_KgaPIOntXDJe8c4glCyB1750",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -c \"import pylint; print(pylint.__file__, pylint.__version__)\" && python -m pylint --version 2>&1 | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_KgaPIOntXDJe8c4glCyB1750",
+     "content": "exit 0\n/testbed/pylint/__init__.py 4.1.0-dev0\npylint 4.1.0-dev0\nastroid 4.2.0b4\nPython 3.12.13 (main, Aug  5 2026, 01:16:26) [GCC 14.2.0]\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_QTPACSPcX93QtmQ30o4E8887",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && python -m pylint --disable=all --enable=comparison-with-callable /tmp/t.py 2>&1 | head -40"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_QTPACSPcX93QtmQ30o4E8887",
+     "content": "exit 0\nException on node <Compare l.5 at 0xffff8ce378c0> in file '/tmp/t.py'\nTraceback (most recent call last):\n  File \"/opt/venv/lib/python3.12/site-packages/pylint/utils/ast_walker.py\", line 87, in walk\n    callback(astroid)\n  File \"/opt/venv/lib/python3.12/site-packages/pylint/checkers/base/comparison_checker.py\", line 304, in visit_compare\n    self._check_callable_comparison(node)\n  File \"/opt/venv/lib/python3.12/site-packages/pylint/checkers/base/comparison_checker.py\", line 287, in _check_callable_comparison\n    and \"typing._SpecialForm\" not in inferred.decoratornames()\n                                     ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/astroid/bases.py\", line 146, in __getattr__\n    return getattr(self._proxied, name)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'Lambda' object has no attribute 'decoratornames'\nCan't write the issue template for the crash in /root/.cache/pylint/pylint-crash-2026-09-03-13-24-18.txt because of: '[Errno 2] No such file or directory: '/root/.cache/pylint/pylint-crash-2026-09-03-13-24-18.txt''\nHere's the content anyway:\nFirst, please verify that the bug is not already filled:\nhttps://github.com/pylint-dev/pylint/issues/\n\nThen create a new issue:\nhttps://github.com/pylint-dev/pylint/issues/new?labels=Crash \ud83d\udca5%2CNeeds triage \ud83d\udce5\n\n\n\nIssue title:\nCrash ```` (if possible, be more specific about what made pylint crash)\n\n### Bug description\n\nWhen parsing the following ``a.py``:\n\n<!--\n If sharing the code is not an option, please state so,\n but providing only the stacktrace would still be helpful.\n -->\n\n```python\nclass C:\n    lam = lambda self: 1\n\n    def check(self):\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_Di9lqUwZFsDM4xY9hihh1909",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && pip show pylint 2>/dev/null | head -5; pip show astroid 2>/dev/null | head -5"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_Di9lqUwZFsDM4xY9hihh1909",
+     "content": "exit 0\nName: pylint\nVersion: 4.1.0.dev0\nSummary: python code static checker\nHome-page: https://github.com/pylint-dev/pylint\nAuthor: \nName: astroid\nVersion: 4.2.0b4\nSummary: An abstract syntax tree for Python with inference support.\nHome-page: \nAuthor: \n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_PonvuPArSB5yYfkBHPep6135",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -c \"import pylint; print(pylint.__file__)\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_PonvuPArSB5yYfkBHPep6135",
+     "content": "exit 0\n/testbed/pylint/__init__.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_BprIDnDwBxHAUug0UyS20146",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/t.py 2>&1 | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_BprIDnDwBxHAUug0UyS20146",
+     "content": "exit 0\nException on node <Compare l.5 at 0xffff9df9fa70> in file '/tmp/t.py'\nTraceback (most recent call last):\n  File \"/testbed/pylint/utils/ast_walker.py\", line 87, in walk\n    callback(astroid)\n  File \"/testbed/pylint/checkers/base/comparison_checker.py\", line 304, in visit_compare\n    self._check_callable_comparison(node)\n  File \"/testbed/pylint/checkers/base/comparison_checker.py\", line 287, in _check_callable_comparison\n    and \"typing._SpecialForm\" not in inferred.decoratornames()\n                                     ^^^^^^^^^^^^^^^^^^^^^^^\n  File \"/opt/venv/lib/python3.12/site-packages/astroid/bases.py\", line 146, in __getattr__\n    return getattr(self._proxied, name)\n           ^^^^^^^^^^^^^^^^^^^^^^^^^^^^\nAttributeError: 'Lambda' object has no attribute 'decoratornames'\n************* Module t\nt.py:1:0: F0002: /tmp/t.py: Fatal error while checking '/tmp/t.py'. Please open an issue in our bug tracker so we address this. There is a pre-filled template that you can use in '/root/.cache/pylint/pylint-crash-2026-09-03-13-24-25.txt'. (astroid-error)\n\n------------------------------------------------------------------\nYour code has been rated at 0.00/10 (previous run: 0.00/10, +0.00)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_VUEhzr6ux0W5buz4GXqK5311",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"comparison-with-callable\\|callable-comparison\\|compare-with-callable\" tests/ | head -40"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_VUEhzr6ux0W5buz4GXqK5311",
+     "content": "exit 0\ntests/functional/c/comparison_with_callable.py:8:if foo == 786:  # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:11:if 666 == goo:  # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:48:if obj1.fake_method != 786: # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:51:if obj1.fake_method != obj2.fake_property: # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:69:    # Does not emit comparison-with-callable because the\ntests/functional/c/comparison_with_callable.txt:1:comparison-with-callable:8:3:8:13::Comparing against a callable, did you omit the parenthesis?:UNDEFINED\ntests/functional/c/comparison_with_callable.txt:2:comparison-with-callable:11:3:11:13::Comparing against a callable, did you omit the parenthesis?:UNDEFINED\ntests/functional/c/comparison_with_callable.txt:3:comparison-with-callable:48:3:48:26::Comparing against a callable, did you omit the parenthesis?:UNDEFINED\ntests/functional/c/comparison_with_callable.txt:4:comparison-with-callable:51:3:51:41::Comparing against a callable, did you omit the parenthesis?:UNDEFINED\ntests/functional/c/comparison_with_callable_typing_constants.py:3:comparison-with-callable.\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_hYpzYM4cVmNcMPSPmzVu7492",
+     "name": "read_file",
+     "arguments": {
+      "path": "/testbed/tests/functional/c/comparison_with_callable.py"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_ET_aI0wQSeQ5VmM1YXemiCO7443",
+     "name": "read_file",
+     "arguments": {
+      "path": "/testbed/tests/functional/c/comparison_with_callable_typing_constants.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_hYpzYM4cVmNcMPSPmzVu7492",
+     "content": "     1\t# pylint: disable = disallowed-name, missing-docstring, useless-return, invalid-name, line-too-long, comparison-of-constants, broad-exception-raised\n     2\tdef foo():\n     3\t    return None\n     4\t\n     5\tdef goo():\n     6\t    return None\n     7\t\n     8\tif foo == 786:  # [comparison-with-callable]\n     9\t    pass\n    10\t\n    11\tif 666 == goo:  # [comparison-with-callable]\n    12\t    pass\n    13\t\n    14\tif foo == goo:\n    15\t    pass\n    16\t\n    17\tif foo() == goo():\n    18\t    pass\n    19\t\n    20\t\n    21\tclass FakeClass:\n    22\t    def __init__(self):\n    23\t        self._fake_prop = 'fake it till you make it!!'\n    24\t\n    25\t    def fake_method(self):\n    26\t        return '666 - The Number of the Beast'\n    27\t\n    28\t    @property\n    29\t    def fake_property(self):\n    30\t        return self._fake_prop\n    31\t\n    32\t    @fake_property.setter\n    33\t    def fake_property(self, prop):\n    34\t        self._fake_prop = prop\n    35\t\n    36\tobj1 = FakeClass()\n    37\tobj2 = FakeClass()\n    38\t\n    39\tif obj1.fake_method == obj2.fake_method:\n    40\t    pass\n    41\t\n    42\tif obj1.fake_property != obj2.fake_property:    # property although is function but is called without parenthesis\n    43\t    pass\n    44\t\n    45\tif obj1.fake_method != foo:\n    46\t    pass\n    47\t\n    48\tif obj1.fake_method != 786: # [comparison-with-callable]\n    49\t    pass\n    50\t\n    51\tif obj1.fake_method != obj2.fake_property: # [comparison-with-callable]\n    52\t    pass\n    53\t\n    54\tif 666 == 786:\n    55\t    pass\n    56\t\n    57\ta = 666\n    58\tb = 786\n    59\tif a == b:\n    60\t    pass\n    61\t\n    62\t\n    63\tdef eventually_raise():\n    64\t    print()\n    65\t    raise Exception\n    66\t\n    67\t\n    68\tif a == eventually_raise:\n    69\t    # Does not emit comparison-with-callable because the\n    70\t    # function (eventually) raises\n    71\t    pass",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_ET_aI0wQSeQ5VmM1YXemiCO7443",
+     "content": "     1\t\"\"\"Typing constants are actually implemented as functions, but they\n     2\traise when called, so Pylint uses that to avoid false positives for\n     3\tcomparison-with-callable.\n     4\t\"\"\"\n     5\tfrom typing import Any, Optional\n     6\t\n     7\t\n     8\tdef check_any(type_) -> bool:\n     9\t    \"\"\"See https://github.com/pylint-dev/pylint/issues/5557\"\"\"\n    10\t    return type_ == Any\n    11\t\n    12\t\n    13\tdef check_optional(type_) -> bool:\n    14\t    \"\"\"\n    15\t    Unlike Any, Optional does not raise in its body.\n    16\t    It raises via its decorator: typing._SpecialForm.__call__()\n    17\t    \"\"\"\n    18\t    return type_ == Optional",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_imiMe9i9noC3BBNb2KgB7913",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline -8 -- pylint/checkers/base/comparison_checker.py"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_TrBn7Iu4WpFzAq81WtjE2722",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"decoratornames\" pylint/ astroid 2>/dev/null | head; echo ---; python - <<'EOF'\nimport astroid\nfrom astroid import nodes\nprint(\"Lambda subclass of FunctionDef?\", issubclass(nodes.FunctionDef, nodes.Lambda))\nlam = nodes.Lambda()\nprint(lam, type(lam.body))\nprint(\"has decoratornames:\", hasattr(nodes.Lambda, \"decoratornames\"))\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_imiMe9i9noC3BBNb2KgB7913",
+     "content": "exit 0\nd654d3898 Fix `literal-comparison` suggestion corrupting identifiers containing \"is\" (#11149)\n42c013110 Remove support for nmp.NaN as import alias for numpy.NaN in nan-comparison (#10583)\n4cea0118c Misc cleanup (#10580)\nedad7ba71 Use match statement in checkers (5) (#10544)\ndad4124be Use match statement in checkers (4) (#10531)\n0d056ff0a [comparison-of-constants] Use as_string() from astroid during message formatting\nd396616db Consistency between  ``is``/``is not`` and ``==``/``!=`` when comparing types for ``unidiomatic-typecheck`` (#10170)\na4754855e Make unidiomatic-typecheck check right-hand side too (#10225)\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_TrBn7Iu4WpFzAq81WtjE2722",
+     "content": "exit 1\npylint/checkers/base/comparison_checker.py:287:                and \"typing._SpecialForm\" not in inferred.decoratornames()\npylint/checkers/typecheck.py:1586:            and \"builtins.staticmethod\" not in called.decoratornames()\npylint/checkers/variables.py:3098:            and \"builtins.staticmethod\" not in scope.decoratornames()\npylint/checkers/classes/class_checker.py:2135:        elif \"builtins.staticmethod\" in node.decoratornames():\n---\nLambda subclass of FunctionDef? False\nTraceback (most recent call last):\n  File \"<stdin>\", line 4, in <module>\nTypeError: Lambda.__init__() missing 3 required positional arguments: 'lineno', 'col_offset', and 'parent'\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_7EmVORLF8GN5NF4Jb0eN2526",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\nmod = astroid.parse(\"\"\"\nf = lambda x: 1\ndef g(x):\n    return 1\n\"\"\")\nfor node in mod.body:\n    if isinstance(node, astroid.nodes.Assign):\n        inferred = next(node.value.infer())\n        print(type(inferred).__name__)\n        if isinstance(inferred, astroid.nodes.Lambda):\n            print(\" body:\", repr(inferred.body), type(inferred.body).__name__)\n            print(\" has decoratornames:\", hasattr(inferred, \"decoratornames\"))\n            print(\" has decorators:\", hasattr(inferred, \"decorators\"))\n    else:\n        print(type(node).__name__)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_7EmVORLF8GN5NF4Jb0eN2526",
+     "content": "exit 0\nLambda\n body: <Const.int l.2 at 0xffffbaa3d5b0> Const\n has decoratornames: False\n has decorators: False\nFunctionDef\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_OoXuE2hAmhi4uSzMCTEb3400",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\ncode = '''\nclass C:\n    lam = lambda self: 1\n    def check(self):\n        return self.lam == 1\n'''\nmod = astroid.parse(code)\ncls = mod.body[0]\n# find the Compare node\ndef walk(n):\n    if isinstance(n, astroid.nodes.Compare):\n        return n\n    for child in n.get_children():\n        r = walk(child)\n        if r is not None:\n            return r\ncmp_node = walk(mod)\nprint(cmp_node)\nleft, right = cmp_node.left, cmp_node.ops[0][1]\nfor operand in (left, right):\n    inferred = next(operand.infer())\n    print(\"operand\", operand.as_string(), \"inferred:\", type(inferred).__name__)\n    if hasattr(inferred, \"_proxied\"):\n        print(\"  _proxied:\", type(inferred._proxied).__name__, inferred._proxied.as_string())\n        prox = inferred._proxied\n        print(\"  prox has decoratornames:\", hasattr(prox, \"decoratornames\"))\n        print(\"  prox body:\", repr(prox.body), type(prox.body).__name__)\n        try:\n            print(\"  prox body iterable?\", list(prox.body))\n        except TypeError as e:\n            print(\"  iter error:\", e)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_OoXuE2hAmhi4uSzMCTEb3400",
+     "content": "exit 0\nCompare(left=<Attribute.lam l.5 at 0xffff9232df70>,\n        ops=[('==', <Const.int l.5 at 0xffff9232e030>)])\noperand self.lam inferred: BoundMethod\n  _proxied: Lambda lambda self: 1\n  prox has decoratornames: False\n  prox body: <Const.int l.3 at 0xffff9232de50> Const\n  iter error: 'Const' object is not iterable\noperand 1 inferred: Const\n  _proxied: ClassDef \n\nclass int(object):\n    \"\"\"int([x]) -> integer\nint(x, base=10) -> integer\n\nConvert a number or string to an integer, or return 0 if no arguments\nare given.  If x is a number, return x.__int__().  For floating-point\nnumbers, this truncates towards zero.\n\nIf x is not a number or if base is given, then x must be a string,\nbytes, or bytearray instance representing an integer literal in the\ngiven base.  The literal can be preceded by '+' or '-' and be surrounded\nby whitespace.  The base defaults to 10.  Valid bases are 0 and 2-36.\nBase 0 means to interpret the base from the string as an integer literal.\n>>> int('0b100', base=0)\n4\"\"\"\n    \n    def __abs__():\n        \"\"\"abs(self)\"\"\"\n        \n    \n    def __add__():\n        \"\"\"Return self+value.\"\"\"\n        \n    \n    def __and__():\n        \"\"\"Return self&value.\"\"\"\n        \n    \n    def __bool__():\n        \"\"\"True if self else False\"\"\"\n        \n    \n    def __ceil__():\n        \"\"\"Ceiling of an Integral returns itself.\"\"\"\n        \n    \n    def __delattr__():\n        \"\"\"Implement delattr(self, name).\"\"\"\n        \n    \n    def __dir__():\n        \"\"\"Default dir() implementation.\"\"\"\n        \n    \n    def __divmod__():\n        \"\"\"Return divmod(self, value).\"\"\"\n        \n    \n    def __eq__():\n        \"\"\"Return self==value.\"\"\"\n        \n    \n    def __float__():\n        \"\"\"float(self)\"\"\"\n        \n    \n    def __floor__():\n        \"\"\"Flooring an Integral returns itself.\"\"\"\n        \n    \n    def __floordiv__():\n        \"\"\"Return self//value.\"\"\"\n        \n    \n    def __format__():\n        \"\"\"Convert to a string according to format_spec.\"\"\"\n        \n    \n    def __ge__():\n        \"\"\"Return self>=value.\"\"\"\n        \n    \n    def __getattribute__():\n        \"\"\"Return getattr(self, name).\"\"\"\n        \n    \n    def __getnewargs__():\n        \n    \n    def __getstate__():\n        \"\"\"Helper for pickle.\"\"\"\n        \n    \n    def __gt__():\n        \"\"\"Return self>value.\"\"\"\n        \n    \n    def __hash__():\n        \"\"\"Return hash(self).\"\"\"\n        \n    \n    def __index__():\n        \"\"\"Return self converted to an integer, if self is suitable for use as an index into a list.\"\"\"\n        \n    \n    def __init__():\n        \"\"\"Initialize self.  See help(type(self)) for accurate signature.\"\"\"\n        \n    \n    def __int__():\n        \"\"\"int(self)\"\"\"\n        \n    \n    def __invert__():\n        \"\"\"~self\"\"\"\n        \n    \n    def __le__():\n        \"\"\"Return self<=value.\"\"\"\n        \n    \n    def __lshift__():\n        \"\"\"Return self<<value.\"\"\"\n        \n    \n    def __lt__():\n        \"\"\"Return self<value.\"\"\"\n        \n    \n    def __mod__():\n        \"\"\"Return self%value.\"\"\"\n        \n    \n    def __mul__():\n        \"\"\"Return self*value.\"\"\"\n        \n    \n    def __ne__():\n        \"\"\"Return self!=value.\"\"\"\n        \n    \n    def __neg__():\n        \"\"\"-self\"\"\"\n        \n    \n    def __new__():\n        \"\"\"Create and return a new object.  See help(type) for accurate signature.\"\"\"\n        \n    \n    def __or__():\n        \"\"\"Return self|value.\"\"\"\n        \n    \n    def __pos__():\n        \"\"\"+self\"\"\"\n        \n    \n    def __pow__():\n        \"\"\"Return pow(self, value, mod).\"\"\"\n        \n    \n    def __radd__():\n        \"\"\"Return value+self.\"\"\"\n        \n    \n    def __rand__():\n        \"\"\"Return value&self.\"\"\"\n        \n    \n    def __rdivmod__():\n        \"\"\"Return divmod(value, self).\"\"\"\n        \n    \n    def __reduce__():\n        \"\"\"Helper for pickle.\"\"\"\n        \n    \n    def __reduce_ex__():\n        \"\"\"Helper for pickle.\"\"\"\n        \n    \n    def __repr__():\n        \"\"\"Return repr(self).\"\"\"\n        \n    \n    def __rfloordiv__():\n        \"\"\"Return value//self.\"\"\"\n        \n    \n    def __rlshift__():\n        \"\"\"Return value<<self.\"\"\"\n        \n    \n    def __rmod__():\n        \"\"\"Return value%self.\"\"\"\n        \n    \n    def __rmul__():\n        \"\"\"Return value*self.\"\"\"\n        \n    \n    def __ror__():\n        \"\"\"Return value|self.\"\"\"\n        \n    \n    def __round__():\n        \"\"\"Rounding an Integral returns itself.\n\nRounding with an ndigits argument also returns an integer.\"\"\"\n        \n    \n    def __rpow__():\n        \"\"\"Return pow(value, self, mod).\"\"\"\n        \n    \n    def __rrshift__():\n        \"\"\"Return value>>self.\"\"\"\n        \n    \n    def __rshift__():\n        \"\"\"Return self>>value.\"\"\"\n        \n    \n    def __rsub__():\n        \"\"\"Return value-self.\"\"\"\n        \n    \n    def __rtruediv__():\n        \"\"\"Return value/self.\"\"\"\n        \n    \n    def __rxor__():\n        \"\"\"Return value^self.\"\"\"\n        \n    \n    def __setattr__():\n        \"\"\"Implement setattr(self, name, value).\"\"\"\n        \n    \n    def __sizeof__():\n        \"\"\"Returns size in memory, in bytes.\"\"\"\n        \n    \n    def __str__():\n        \"\"\"Return str(self).\"\"\"\n        \n    \n    def __sub__():\n        \"\"\"Return self-value.\"\"\"\n        \n    \n    def __subclasshook__():\n        \"\"\"Abstract classes can override this to customize issubclass().\n\nThis is invoked early on by abc.ABCMeta.__subclasscheck__().\nIt should return True, False or NotImplemented.  If it returns\nNotImplemented, the normal algorithm is used.  Otherwise, it\noverrides the normal algorithm (and the outcome is cached).\n\"\"\"\n        \n    \n    def __truediv__():\n        \"\"\"Return self/value.\"\"\"\n        \n    \n    def __trunc__():\n        \"\"\"Truncating an Integral returns itself.\"\"\"\n        \n    \n    def __xor__():\n        \"\"\"Return self^value.\"\"\"\n        \n    \n    def as_integer_ratio():\n        \"\"\"Return a pair of integers, whose ratio is equal to the original int.\n\nThe ratio is in lowest terms and has a positive denominator.\n\n>>> (10).as_integer_ratio()\n(10, 1)\n>>> (-10).as_integer_ratio()\n(-10, 1)\n>>> (0).as_integer_ratio()\n(0, 1)\"\"\"\n        \n    \n    def bit_count():\n        \"\"\"Number of ones in the binary representation of the absolute value of self.\n\nAlso known as the population count.\n\n>>> bin(13)\n'0b1101'\n>>> (13).bit_count()\n3\"\"\"\n        \n    \n    def bit_length():\n        \"\"\"Number of bits necessary to represent self in binary.\n\n>>> bin(37)\n'0b100101'\n>>> (37).bit_length()\n6\"\"\"\n        \n    \n    def conjugate():\n        \"\"\"Returns self, the complex conjugate of any int.\"\"\"\n        \n    \n    \n    class denominator:\n        \"\"\"the denominator of a rational number in lowest terms\"\"\"\n        \n    \n    \n    \n    class imag:\n        \"\"\"the imaginary part of a complex number\"\"\"\n        \n    \n    \n    def is_integer():\n        \"\"\"Returns True. Exists for duck type compatibility with float.is_integer.\"\"\"\n        \n    \n    \n    class numerator:\n        \"\"\"the numerator of a rational number in lowest terms\"\"\"\n        \n    \n    \n    \n    class real:\n        \"\"\"the real part of a complex number\"\"\"\n        \n    \n    \n    def to_bytes():\n        \"\"\"Return an array of bytes representing an integer.\n\n  length\n    Length of bytes object to use.  An OverflowError is raised if the\n    integer is not representable with the given number of bytes.  Default\n    is length 1.\n  byteorder\n    The byte order used to represent the integer.  If byteorder is 'big',\n    the most significant byte is at the beginning of the byte array.  If\n    byteorder is 'little', the most significant byte is at the end of the\n    byte array.  To request the native byte order of the host system, use\n    `sys.byteorder' as the byte order value.  Default is to use 'big'.\n  signed\n    Determines whether two's complement is used to represent the integer.\n    If signed is False and a negative integer is given, an OverflowError\n    is raised.\"\"\"\n        \n\n  prox has decoratornames: False\n  prox body: [<FunctionDef.__abs__ l.0 at 0xffff926034a0>, <FunctionDef.__add__ l.0 at 0xffff92603620>, <FunctionDef.__and__ l.0 at 0xffff926037d0>, <FunctionDef.__bool__ l.0 at 0xffff92603980>, <FunctionDef.__ceil__ l.0 at 0xffff92603b30>, <FunctionDef.__delattr__ l.0 at 0xffff92603ce0>, <FunctionDef.__dir__ l.0 at 0xffff92603e90>, <FunctionDef.__divmod__ l.0 at 0xffff92620080>, <FunctionDef.__eq__ l.0 at 0xffff92620230>, <FunctionDef.__float__ l.0 at 0xffff926203e0>, <FunctionDef.__floor__ l.0 at 0xffff92620590>, <FunctionDef.__floordiv__ l.0 at 0xffff92620740>, <FunctionDef.__format__ l.0 at 0xffff926208f0>, <FunctionDef.__ge__ l.0 at 0xffff92620aa0>, <FunctionDef.__getattribute__ l.0 at 0xffff92620c50>, <FunctionDef.__getnewargs__ l.0 at 0xffff92620e00>, <FunctionDef.__getstate__ l.0 at 0xffff92620f80>, <FunctionDef.__gt__ l.0 at 0xffff92621130>, <FunctionDef.__hash__ l.0 at 0xffff926212e0>, <FunctionDef.__index__ l.0 at 0xffff92621490>, <FunctionDef.__init__ l.0 at 0xffff92621640>, <EmptyNode.__init_subclass__ l.0 at 0xffff926217f0>, <FunctionDef.__int__ l.0 at 0xffff92621850>, <FunctionDef.__invert__ l.0 at 0xffff92621a30>, <FunctionDef.__le__ l.0 at 0xffff92621bb0>, <FunctionDef.__lshift__ l.0 at 0xffff92621d60>, <FunctionDef.__lt__ l.0 at 0xffff92621f10>, <FunctionDef.__mod__ l.0 at 0xffff926220c0>, <FunctionDef.__mul__ l.0 at 0xffff92622270>, <FunctionDef.__ne__ l.0 at 0xffff92622420>, <FunctionDef.__neg__ l.0 at 0xffff92622630>, <FunctionDef.__new__ l.0 at 0xffff92622810>, <FunctionDef.__or__ l.0 at 0xffff92622990>, <FunctionDef.__pos__ l.0 at 0xffff92622ba0>, <FunctionDef.__pow__ l.0 at 0xffff92622d20>, <FunctionDef.__radd__ l.0 at 0xffff92622ed0>, <FunctionDef.__rand__ l.0 at 0xffff92623080>, <FunctionDef.__rdivmod__ l.0 at 0xffff92623230>, <FunctionDef.__reduce__ l.0 at 0xffff926233e0>, <FunctionDef.__reduce_ex__ l.0 at 0xffff92623590>, <FunctionDef.__repr__ l.0 at 0xffff92623740>, <FunctionDef.__rfloordiv__ l.0 at 0xffff926238f0>, <FunctionDef.__rlshift__ l.0 at 0xffff92623aa0>, <FunctionDef.__rmod__ l.0 at 0xffff92623c50>, <FunctionDef.__rmul__ l.0 at 0xffff92623e00>, <FunctionDef.__ror__ l.0 at 0xffff92623fb0>, <FunctionDef.__round__ l.0 at 0xffff926441a0>, <FunctionDef.__rpow__ l.0 at 0xffff92644350>, <FunctionDef.__rrshift__ l.0 at 0xffff92644500>, <FunctionDef.__rshift__ l.0 at 0xffff926446b0>, <FunctionDef.__rsub__ l.0 at 0xffff92644860>, <FunctionDef.__rtruediv__ l.0 at 0xffff92644a10>, <FunctionDef.__rxor__ l.0 at 0xffff92644bc0>, <FunctionDef.__setattr__ l.0 at 0xffff92644d70>, <FunctionDef.__sizeof__ l.0 at 0xffff92644f20>, <FunctionDef.__str__ l.0 at 0xffff926450d0>, <FunctionDef.__sub__ l.0 at 0xffff92645280>, <FunctionDef.__subclasshook__ l.0 at 0xffff92645430>, <FunctionDef.__truediv__ l.0 at 0xffff926455e0>, <FunctionDef.__trunc__ l.0 at 0xffff92645790>, <FunctionDef.__xor__ l.0 at 0xffff92645940>, <FunctionDef.as_integer_ratio l.0 at 0xffff92645af0>, <FunctionDef.bit_count l.0 at 0xffff92645ca0>, <FunctionDef.bit_length l.0 at 0xffff92645e50>, <FunctionDef.conjugate l.0 at 0xffff92646000>, <ClassDef.denominator l.0 at 0xffff926461b0>, <EmptyNode.from_bytes l.0 at 0xffff926462d0>, <ClassDef.imag l.0 at 0xffff92646300>, <FunctionDef.is_integer l.0 at 0xffff926463f0>, <ClassDef.numerator l.0 at 0xffff92646570>, <ClassDef.real l.0 at 0xffff92646690>, <FunctionDef.to_bytes l.0 at 0xffff92646780>] list\n  prox body iterable? [<FunctionDef.__abs__ l.0 at 0xffff926034a0>, <FunctionDef.__add__ l.0 at 0xffff92603620>, <FunctionDef.__and__ l.0 at 0xffff926037d0>, <FunctionDef.__bool__ l.0 at 0xffff92603980>, <FunctionDef.__ceil__ l.0 at 0xffff92603b30>, <FunctionDef.__delattr__ l.0 at 0xffff92603ce0>, <FunctionDef.__dir__ l.0 at 0xffff92603e90>, <FunctionDef.__divmod__ l.0 at 0xffff92620080>, <FunctionDef.__eq__ l.0 at 0xffff92620230>, <FunctionDef.__float__ l.0 at 0xffff926203e0>, <FunctionDef.__floor__ l.0 at 0xffff92620590>, <FunctionDef.__floordiv__ l.0 at 0xffff92620740>, <FunctionDef.__format__ l.0 at 0xffff926208f0>, <FunctionDef.__ge__ l.0 at 0xffff92620aa0>, <FunctionDef.__getattribute__ l.0 at 0xffff92620c50>, <FunctionDef.__getnewargs__ l.0 at 0xffff92620e00>, <FunctionDef.__getstate__ l.0 at 0xffff92620f80>, <FunctionDef.__gt__ l.0 at 0xffff92621130>, <FunctionDef.__hash__ l.0 at 0xffff926212e0>, <FunctionDef.__index__ l.0 at 0xffff92621490>, <FunctionDef.__init__ l.0 at 0xffff92621640>, <EmptyNode.__init_subclass__ l.0 at 0xffff926217f0>, <FunctionDef.__int__ l.0 at 0xffff92621850>, <FunctionDef.__invert__ l.0 at 0xffff92621a30>, <FunctionDef.__le__ l.0 at 0xffff92621bb0>, <FunctionDef.__lshift__ l.0 at 0xffff92621d60>, <FunctionDef.__lt__ l.0 at 0xffff92621f10>, <FunctionDef.__mod__ l.0 at 0xffff926220c0>, <FunctionDef.__mul__ l.0 at 0xffff92622270>, <FunctionDef.__ne__ l.0 at 0xffff92622420>, <FunctionDef.__neg__ l.0 at 0xffff92622630>, <FunctionDef.__new__ l.0 at 0xffff92622810>, <FunctionDef.__or__ l.0 at 0xffff92622990>, <FunctionDef.__pos__ l.0 at 0xffff92622ba0>, <FunctionDef.__pow__ l.0 at 0xffff92622d20>, <FunctionDef.__radd__ l.0 at 0xffff92622ed0>, <FunctionDef.__rand__ l.0 at 0xffff92623080>, <FunctionDef.__rdivmod__ l.0 at 0xffff92623230>, <FunctionDef.__reduce__ l.0 at 0xffff926233e0>, <FunctionDef.__reduce_ex__ l.0 at 0xffff92623590>, <FunctionDef.__repr__ l.0 at 0xffff92623740>, <FunctionDef.__rfloordiv__ l.0 at 0xffff926238f0>, <FunctionDef.__rlshift__ l.0 at 0xffff92623aa0>, <FunctionDef.__rmod__ l.0 at 0xffff92623c50>, <FunctionDef.__rmul__ l.0 at 0xffff92623e00>, <FunctionDef.__ror__ l.0 at 0xffff92623fb0>, <FunctionDef.__round__ l.0 at 0xffff926441a0>, <FunctionDef.__rpow__ l.0 at 0xffff92644350>, <FunctionDef.__rrshift__ l.0 at 0xffff92644500>, <FunctionDef.__rshift__ l.0 at 0xffff926446b0>, <FunctionDef.__rsub__ l.0 at 0xffff92644860>, <FunctionDef.__rtruediv__ l.0 at 0xffff92644a10>, <FunctionDef.__rxor__ l.0 at 0xffff92644bc0>, <FunctionDef.__setattr__ l.0 at 0xffff92644d70>, <FunctionDef.__sizeof__ l.0 at 0xffff92644f20>, <FunctionDef.__str__ l.0 at 0xffff926450d0>, <FunctionDef.__sub__ l.0 at 0xffff92645280>, <FunctionDef.__subclasshook__ l.0 at 0xffff92645430>, <FunctionDef.__truediv__ l.0 at 0xffff926455e0>, <FunctionDef.__trunc__ l.0 at 0xffff92645790>, <FunctionDef.__xor__ l.0 at 0xffff92645940>, <FunctionDef.as_integer_ratio l.0 at 0xffff92645af0>, <FunctionDef.bit_count l.0 at 0xffff92645ca0>, <FunctionDef.bit_length l.0 at 0xffff92645e50>, <FunctionDef.conjugate l.0 at 0xffff92646000>, <ClassDef.denominator l.0 at 0xffff926461b0>, <EmptyNode.from_bytes l.0 at 0xffff926462d0>, <ClassDef.imag l.0 at 0xffff92646300>, <FunctionDef.is_integer l.0 at 0xffff926463f0>, <ClassDef.numerator l.0 at 0xffff92646570>, <ClassDef.real l.0 at 0xffff92646690>, <FunctionDef.to_bytes l.0 at 0xffff92646780>]\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_DShj8ReKMGlTTiIZC5nC2174",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\nmod = astroid.parse('''\nclass C:\n    lam = lambda self: 1\n    def method(self):\n        return 1\n\nc = C()\na = c.method\nb = C.method\nd = c.lam\ne = C.lam\n''')\nfor stmt in mod.body[2:]:\n    inferred = next(stmt.value.infer())\n    print(stmt.targets[0].name, \"->\", type(inferred).__name__)\n    if isinstance(inferred, astroid.BoundMethod):\n        print(\"   bound to\", type(inferred._proxied).__name__)\n    if isinstance(inferred, astroid.UnboundMethod):\n        print(\"   unbound proxied\", type(inferred._proxied).__name__)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_DShj8ReKMGlTTiIZC5nC2174",
+     "content": "exit 0\na -> BoundMethod\n   bound to UnboundMethod\n   unbound proxied UnboundMethod\nb -> UnboundMethod\n   unbound proxied FunctionDef\nd -> BoundMethod\n   bound to Lambda\n   unbound proxied Lambda\ne -> Lambda\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_qzXyl9pd4dcZ4qhXivn35408",
+     "name": "write_file",
+     "arguments": {
+      "path": "/tmp/t2.py",
+      "content": "class C:\n    def method(self):\n        return 1\n\nc = C()\nif C.method == 1:\n    pass\nif c.method == 1:  # [comparison-with-callable]\n    pass\n"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_qzXyl9pd4dcZ4qhXivn35408",
+     "content": "wrote 141 bytes to /tmp/t2.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_wdPEq5PEPosSf6so8aIj5411",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/t2.py 2>&1 | grep -v \"^Exception\\|Traceback\\|File \\|^\\s*\\^\\|^AttributeError\\|astroid-error\\|pre-filled\\|Fatal error\\|^Here's\\|issue\" | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_wdPEq5PEPosSf6so8aIj5411",
+     "content": "exit 0\n************* Module t2\nt2.py:8:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n-----------------------------------\nYour code has been rated at 8.75/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_JKf7ng2z7Xaj8OBW7OFF9158",
+     "name": "bash",
+     "arguments": {
+      "command": "find / -name \"comparison_checker.py\" -path \"*pylint*\" 2>/dev/null"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_JKf7ng2z7Xaj8OBW7OFF9158",
+     "content": "exit 0\n/opt/venv/lib/python3.12/site-packages/pylint/checkers/base/comparison_checker.py\n/testbed/pylint/checkers/base/comparison_checker.py\n/testbed/build/lib/pylint/checkers/base/comparison_checker.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_7wi2TlpYdxxoIzgAAMtf8986",
+     "name": "bash",
+     "arguments": {
+      "command": "ls -la /opt/venv/lib/python3.12/site-packages/ | grep -i pylint; readlink -f /opt/venv/lib/python3.12/site-packages/pylint/checkers/base/comparison_checker.py; diff -q /opt/venv/lib/python3.12/site-packages/pylint/checkers/base/comparison_checker.py /testbed/pylint/checkers/base/comparison_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_7wi2TlpYdxxoIzgAAMtf8986",
+     "content": "exit 0\ndrwxr-xr-x 12 root root   4096 Sep  3 12:21 pylint\ndrwxr-xr-x  3 root root   4096 Sep  3 12:21 pylint-4.1.0.dev0.dist-info\n/opt/venv/lib/python3.12/site-packages/pylint/checkers/base/comparison_checker.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_TqB0kg6uu2hJ0rpukCAf0401",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && timeout 15 pip download pylint==4.1.0 --no-deps -d /tmp/pipdl 2>&1 | tail -5 || echo \"no internet or fail\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_TqB0kg6uu2hJ0rpukCAf0401",
+     "content": "exit 0\nWARNING: Retrying (Retry(total=2, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"HTTPSConnection(host='pypi.org', port=443): Failed to resolve 'pypi.org' ([Errno -3] Temporary failure in name resolution)\")': /simple/pylint/\nWARNING: Retrying (Retry(total=1, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"HTTPSConnection(host='pypi.org', port=443): Failed to resolve 'pypi.org' ([Errno -3] Temporary failure in name resolution)\")': /simple/pylint/\nWARNING: Retrying (Retry(total=0, connect=None, read=None, redirect=None, status=None)) after connection broken by 'NameResolutionError(\"HTTPSConnection(host='pypi.org', port=443): Failed to resolve 'pypi.org' ([Errno -3] Temporary failure in name resolution)\")': /simple/pylint/\nERROR: Could not find a version that satisfies the requirement pylint==4.1.0 (from versions: none)\nERROR: No matching distribution found for pylint==4.1.0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_uWGYEprr2IQKEiARdTLA4950",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -n \"BoundMethod\" AGENTS.md | head; sed -n '1,80p' AGENTS.md"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_uWGYEprr2IQKEiARdTLA4950",
+     "content": "exit 0\n38:`Generator`, `BoundMethod`/`UnboundMethod`, and `util.Uninferable` \u2014 resolve attributes\n49:  base \u2014 or the proxied node may legitimately lack the attribute (a `BoundMethod` can\n# Agent guidelines\n\n## AST-based checking\n\nPylint is an AST-based linter built on [astroid](https://github.com/pylint-dev/astroid).\nWhen writing or modifying checkers, prefer **`isinstance` against concrete astroid node\ntypes** combined with domain knowledge of Python syntax, rather than duck-typing with\n`getattr`/`hasattr`.\n\nThe visitor pattern from `BaseChecker` already narrows the node type for you: a\n`visit_call` method only receives `nodes.Call`, a `visit_assign` only receives\n`nodes.Assign`, and so on. Inside such a method, the node's structure is known \u2014 its\nattributes follow from the grammar (e.g. a `nodes.Call` always has `.func` and `.args`).\nWalk and type-check that known structure with `isinstance` instead of probing for\nattributes defensively.\n\nGood:\n\n```python\ndef visit_call(self, node: nodes.Call) -> None:\n    if isinstance(node.func, nodes.Attribute):\n        ...\n```\n\nAvoid:\n\n```python\ndef visit_call(self, node) -> None:\n    if hasattr(node.func, \"attrname\"):  # don't probe \u2014 check the type\n        ...\n```\n\nThis keeps checks precise, readable, and aligned with astroid's typed node API.\n\n### Caveat: astroid proxies and `Uninferable`\n\n`isinstance` checks the _static_ node type. Some astroid objects \u2014 `bases.Instance`,\n`Generator`, `BoundMethod`/`UnboundMethod`, and `util.Uninferable` \u2014 resolve attributes\nthrough `__getattr__`, proxying to a wrapped node. So `hasattr(obj, \"x\")` can be True at\nruntime on an object whose class has no `x`, and a naive `isinstance(obj, ConcreteNode)`\nwill _drop_ cases the old `hasattr` caught (e.g. an exception inferred to an `Instance`\nthat proxies `ancestors`, or an `AsyncGenerator` that proxies `locals`).\n\nWhen replacing such a guard:\n\n- Include the proxy base in the type tuple \u2014 e.g. `(nodes.ClassDef, bases.Instance)`, or\n  `(nodes.LocalsDictNodeNG, bases.Proxy)` for anything exposing `qname`.\n- If the check is a behavioral _capability_ spanning heterogeneous nodes with no common\n  base \u2014 or the proxied node may legitimately lack the attribute (a `BoundMethod` can\n  wrap a `Lambda`, which has no `.decorators`) \u2014 keep `hasattr`. That is honest\n  duck-typing, not a grammar check, and `isinstance` cannot express it safely.\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_7n0WkezwZ6tmY9D2UAHa8625",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline --all | grep -i \"11055\" | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_7n0WkezwZ6tmY9D2UAHa8625",
+     "content": "exit 0\nd6eb4812f fix: use metaclass __call__ signature on class instantiation (#11055)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ZrlWGU1RDZDGnbw1orLF1880",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline -S '\"typing._SpecialForm\" not in inferred.decoratornames()' -- pylint/checkers/base/comparison_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ZrlWGU1RDZDGnbw1orLF1880",
+     "content": "exit 0\n977b08d16 [refactor] Create files for comparison checker in pylint.checker.base\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_Gm0LL6IHF7aiyP6nTEn93803",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline -S \"typing._SpecialForm\" --all -- pylint/ | head; git log --oneline -S \"eventually_raise\" --all -- tests/ | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_Gm0LL6IHF7aiyP6nTEn93803",
+     "content": "exit 0\na5a77f6e8 [possibly-used-before-assignment] Avoid FP for typing.NoReturn & Never (#9714)\na47fbbf61 Fix `undefined-loop-variable` with `NoReturn` and `Never` (#7476)\n977b08d16 [refactor] Create files for comparison checker in pylint.checker.base\n6d30e12f4 Add broken Callable check (#5891)\n1faf365b6 Add broken NoReturn check (#5304)\n2a6938735 Fix #5557: Don't emit `comparison-with-callable` if the callable raises (#5563)\nfce898e28 Add new extension TypingChecker (#4382)\n44a3aa25f Fix class constant naming\n2a6938735 Fix #5557: Don't emit `comparison-with-callable` if the callable raises (#5563)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_7ap9Y486DOXXZYbo6p278437",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python - <<'EOF'\nimport astroid\ncode = '''\nclass FakeClass:\n    def __init__(self):\n        self._fake_prop = 'fake'\n    def fake_method(self):\n        return '666'\n    @property\n    def fake_property(self):\n        return self._fake_prop\n\nobj1 = FakeClass()\nobj2 = FakeClass()\na = obj1.fake_method\nb = obj1.fake_property\nc = obj2.fake_property\n'''\nmod = astroid.parse(code)\nfor stmt in mod.body[2:]:\n    for target, val in zip(stmt.targets, [stmt.value]) if isinstance(stmt, astroid.nodes.Assign) else []:\n        pass\n# simpler, infer each assignment value\nfor stmt in mod.body:\n    if isinstance(stmt, astroid.nodes.Assign):\n        inf = next(stmt.value.infer())\n        print(stmt.targets[0].name, \"->\", type(inf).__name__)\n        def root(x, depth=0):\n            if isinstance(x, (astroid.BoundMethod, astroid.UnboundMethod)):\n                return root(x._proxied, depth+1)\n            return x, depth\n        r, d = root(inf)\n        print(\"   root:\", type(r).__name__, \"depth\", d)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_7ap9Y486DOXXZYbo6p278437",
+     "content": "exit 0\nobj1 -> Instance\n   root: Instance depth 0\nobj2 -> Instance\n   root: Instance depth 0\na -> BoundMethod\n   root: FunctionDef depth 2\nb -> Const\n   root: Const depth 0\nc -> Const\n   root: Const depth 0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_off00uRc7Okpkk90PQxC3073",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git branch -a 2>/dev/null | head -20; git tag | tail -5; git remote -v"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_off00uRc7Okpkk90PQxC3073",
+     "content": "exit 0\n* pico-base\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_UU9iaFkZLgeM6rfRcQLP9675",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"comparison-with-callable\" doc/ pylint/ | grep -v \".pyc\" | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_UU9iaFkZLgeM6rfRcQLP9675",
+     "content": "exit 0\ngrep: pylint/checkers/base/__pycache__/comparison_checker.cpython-312.pyc: binary file matches\ndoc/whatsnew/2/2.0/full.rst:120:* Add ``comparison-with-callable`` to warn for comparison with bare callable, without calling it.\ndoc/whatsnew/2/2.0/summary.rst:37:* A new check was added, ``comparison-with-callable``.\ndoc/whatsnew/2/2.13/full.rst:609:* Fix ``comparison-with-callable`` false positive for callables that raise, such\ndoc/whatsnew/2/2.13/summary.rst:498:* Fix ``comparison-with-callable`` false positive for callables that raise, such\ndoc/user_guide/checkers/features.rst:182::comparison-with-callable (W0143): *Comparing against a callable, did you omit the parenthesis?*\ndoc/user_guide/messages/messages_overview.rst:234:   warning/comparison-with-callable\ndoc/data/messages/c/comparison-with-callable/bad.py:7:    return fruit == function_returning_a_fruit  # [comparison-with-callable]\npylint/checkers/base/comparison_checker.py:71:            \"comparison-with-callable\",\npylint/checkers/base/comparison_checker.py:292:            self.add_message(\"comparison-with-callable\", node=node)\npylint/checkers/base/comparison_checker.py:300:        \"comparison-with-callable\",\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_bV7B6TwAzlDzrpkeDOsA2170",
+     "name": "bash",
+     "arguments": {
+      "command": "python - <<'EOF'\nimport astroid, inspect\nfrom astroid import bases\nprint(inspect.getsource(bases.BoundMethod))\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_bV7B6TwAzlDzrpkeDOsA2170",
+     "content": "exit 0\nclass BoundMethod(UnboundMethod):\n    \"\"\"A special node representing a method bound to an instance.\"\"\"\n\n    special_attributes = objectmodel.BoundMethodModel()\n\n    def __init__(\n        self,\n        proxy: nodes.FunctionDef | nodes.Lambda | UnboundMethod,\n        bound: SuccessfulInferenceResult,\n        original_caller: SuccessfulInferenceResult | None = None,\n    ) -> None:\n        super().__init__(proxy)\n        self.bound = bound\n        # For super() calls: the actual instance/class that called super()\n        # Used to correctly infer return type of methods returning Self\n        self.original_caller = original_caller\n\n    def implicit_parameters(self) -> Literal[0, 1]:\n        if self.name == \"__new__\":\n            # __new__ acts as a classmethod but the class argument is not implicit.\n            return 0\n        return 1\n\n    def is_bound(self) -> Literal[True]:\n        return True\n\n    def _infer_type_new_call(\n        self, caller: nodes.Call, context: InferenceContext\n    ) -> nodes.ClassDef | None:  # noqa: C901\n        \"\"\"Try to infer what type.__new__(mcs, name, bases, attrs) returns.\n\n        In order for such call to be valid, the metaclass needs to be\n        a subtype of ``type``, the name needs to be a string, the bases\n        needs to be a tuple of classes\n        \"\"\"\n        # pylint: disable=import-outside-toplevel; circular import\n        from astroid.nodes import Pass\n\n        # Verify the metaclass\n        try:\n            mcs = next(caller.args[0].infer(context=context))\n        except StopIteration as e:\n            raise InferenceError(context=context) from e\n        if not isinstance(mcs, nodes.ClassDef):\n            # Not a valid first argument.\n            raise InferenceError(\n                \"type.__new__() requires a class for metaclass\", context=context\n            )\n        if not mcs.is_subtype_of(\"builtins.type\"):\n            # Not a valid metaclass.\n            raise InferenceError(\n                \"type.__new__() metaclass must be a subclass of type\", context=context\n            )\n\n        # Verify the name\n        try:\n            name = next(caller.args[1].infer(context=context))\n        except StopIteration as e:\n            raise InferenceError(context=context) from e\n        if not isinstance(name, nodes.Const):\n            # Not a valid name, needs to be a const.\n            raise InferenceError(\n                \"type.__new__() requires a constant for name\", context=context\n            )\n        if not isinstance(name.value, str):\n            # Needs to be a string.\n            raise InferenceError(\n                \"type.__new__() requires a string for name\", context=context\n            )\n\n        # Verify the bases\n        try:\n            bases = next(caller.args[2].infer(context=context))\n        except StopIteration as e:\n            raise InferenceError(context=context) from e\n        if not isinstance(bases, nodes.Tuple):\n            # Needs to be a tuple.\n            raise InferenceError(\n                \"type.__new__() requires a tuple for bases\", context=context\n            )\n        try:\n            inferred_bases = [next(elt.infer(context=context)) for elt in bases.elts]\n        except StopIteration as e:\n            raise InferenceError(context=context) from e\n        if any(not isinstance(base, nodes.ClassDef) for base in inferred_bases):\n            # All the bases needs to be Classes\n            raise InferenceError(\n                \"type.__new__() requires classes for bases\", context=context\n            )\n\n        # Verify the attributes.\n        try:\n            attrs = next(caller.args[3].infer(context=context))\n        except StopIteration as e:\n            raise InferenceError(context=context) from e\n        if not isinstance(attrs, nodes.Dict):\n            # Needs to be a dictionary.\n            raise InferenceError(\n                \"type.__new__() requires a dict for attrs\", context=context\n            )\n        cls_locals: dict[str, list[InferenceResult]] = collections.defaultdict(list)\n        for key, value in attrs.items:\n            try:\n                key = next(key.infer(context=context))\n            except StopIteration as e:\n                raise InferenceError(context=context) from e\n            try:\n                value = next(value.infer(context=context))\n            except StopIteration as e:\n                raise InferenceError(context=context) from e\n            # Ignore non string keys\n            if isinstance(key, nodes.Const) and isinstance(key.value, str):\n                cls_locals[key.value].append(value)\n\n        # Build the class from now.\n        cls = mcs.__class__(\n            name=name.value,\n            lineno=caller.lineno or 0,\n            col_offset=caller.col_offset or 0,\n            parent=caller,\n            end_lineno=caller.end_lineno,\n            end_col_offset=caller.end_col_offset,\n        )\n        empty = Pass(\n            parent=cls,\n            lineno=caller.lineno,\n            col_offset=caller.col_offset,\n            end_lineno=caller.end_lineno,\n            end_col_offset=caller.end_col_offset,\n        )\n        cls.postinit(\n            bases=bases.elts,\n            body=[empty],\n            decorators=None,\n            newstyle=True,\n            metaclass=mcs,\n            keywords=[],\n        )\n        cls.locals = cls_locals\n        return cls\n\n    def infer_call_result(\n        self,\n        caller: SuccessfulInferenceResult | None,\n        context: InferenceContext | None = None,\n    ) -> Iterator[InferenceResult]:\n        # For super() calls, use original_caller to correctly infer Self return type\n        bound_node = self.original_caller if self.original_caller else self.bound\n        context = bind_context_to_node(context, bound_node)\n        if (\n            isinstance(self.bound, nodes.ClassDef)\n            and self.bound.name == \"type\"\n            and self.name == \"__new__\"\n            and isinstance(caller, nodes.Call)\n        ):\n            # Check if we have a ``type.__new__(mcs, name, bases, attrs)`` call.\n            if len(caller.args) != 4:\n                raise InferenceError(\n                    f\"type.__new__() requires 4 arguments, got {len(caller.args)}\",\n                    context=context,\n                )\n            new_cls = self._infer_type_new_call(caller, context)\n            if new_cls:\n                return iter((new_cls,))\n\n        return super().infer_call_result(caller, context)\n\n    def bool_value(self, context: InferenceContext | None = None) -> Literal[True]:\n        return True\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_gaHpOtYCJgUHvUBIQW615993",
+     "name": "bash",
+     "arguments": {
+      "command": "python - <<'EOF'\nimport inspect\nfrom astroid import bases\nsrc = inspect.getsource(bases.UnboundMethod.__init__)\nprint(src)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_gaHpOtYCJgUHvUBIQW615993",
+     "content": "exit 0\n    def __init__(\n        self,\n        proxied: (\n            nodes.ClassDef | nodes.FunctionDef | nodes.Lambda | UnboundMethod | None\n        ) = None,\n    ) -> None:\n        if proxied is None:\n            # This is a hack to allow calling this __init__ during bootstrapping of\n            # builtin classes and their docstrings.\n            # For Const, Generator, and UnionType nodes the _proxied attribute\n            # is set during bootstrapping\n            # as we first need to build the ClassDef that they can proxy.\n            # Thus, if proxied is None self should be a Const or Generator\n            # as that is the only way _proxied will be correctly set as a ClassDef.\n            assert isinstance(self, (nodes.Const, Generator, UnionType))\n        else:\n            self._proxied = proxied\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_XXbC3aNhW4P7qlp2OXYh4094",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"comparison-with-callable\" tests/functional --include=*.py | grep -v \"_typing_constants\" | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_XXbC3aNhW4P7qlp2OXYh4094",
+     "content": "exit 0\ntests/functional/c/comparison_with_callable.py:8:if foo == 786:  # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:11:if 666 == goo:  # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:48:if obj1.fake_method != 786: # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:51:if obj1.fake_method != obj2.fake_property: # [comparison-with-callable]\ntests/functional/c/comparison_with_callable.py:69:    # Does not emit comparison-with-callable because the\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_3EWOmRaJOaM3r7jHMBke8539",
+     "name": "bash",
+     "arguments": {
+      "command": "python - <<'EOF'\nimport astroid\nfrom astroid import nodes\nprint(nodes.Lambda.__mro__)\nEOF"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_3EWOmRaJOaM3r7jHMBke8539",
+     "content": "exit 0\n(<class 'astroid.nodes.scoped_nodes.scoped_nodes.Lambda'>, <class 'astroid.nodes._base_nodes.FilterStmtsBaseNode'>, <class 'astroid.nodes.scoped_nodes.mixin.LocalsDictNodeNG'>, <class 'astroid.nodes._base_nodes.LookupMixIn'>, <class 'astroid.nodes.node_ng.NodeNG'>, <class 'object'>)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "text",
+     "text": "Now let me make the fix to `_check_callable_comparison`:"
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_00_53MpjnjgPDmhrPqGOaO51361",
+     "name": "edit_file",
+     "arguments": {
+      "path": "/testbed/pylint/checkers/base/comparison_checker.py",
+      "old": "        bare_callables = (nodes.FunctionDef, astroid.BoundMethod)\n        left_operand, right_operand = node.left, node.ops[0][1]\n        # this message should be emitted only when there is comparison of bare callable\n        # with non bare callable.\n        number_of_bare_callables = 0\n        for operand in left_operand, right_operand:\n            inferred = utils.safe_infer(operand)\n            # Ignore callables that raise, as well as typing constants\n            # implemented as functions (that raise via their decorator)\n            if (\n                isinstance(inferred, bare_callables)\n                and \"typing._SpecialForm\" not in inferred.decoratornames()\n                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n            ):\n                number_of_bare_callables += 1",
+      "new": "        bare_callables = (nodes.FunctionDef, nodes.Lambda, astroid.BoundMethod)\n        left_operand, right_operand = node.left, node.ops[0][1]\n        # this message should be emitted only when there is comparison of bare callable\n        # with non bare callable.\n        number_of_bare_callables = 0\n        for operand in left_operand, right_operand:\n            inferred = utils.safe_infer(operand)\n            if not isinstance(inferred, bare_callables):\n                continue\n            if isinstance(inferred, astroid.BoundMethod):\n                # A BoundMethod may proxy a Lambda (e.g. a lambda assigned as a\n                # class attribute and accessed through an instance). Lambdas have\n                # no `decoratornames()` and their body is a single expression\n                # rather than a list of statements, so unwrap the proxy first.\n                while isinstance(\n                    inferred, (astroid.BoundMethod, astroid.UnboundMethod)\n                ):\n                    inferred = inferred._proxied\n            if isinstance(inferred, nodes.Lambda):\n                number_of_bare_callables += 1\n                continue\n            # Ignore callables that raise, as well as typing constants\n            # implemented as functions (that raise via their decorator)\n            if (\n                \"typing._SpecialForm\" not in inferred.decoratornames()\n                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n            ):\n                number_of_bare_callables += 1"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_53MpjnjgPDmhrPqGOaO51361",
+     "content": "edited /testbed/pylint/checkers/base/comparison_checker.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_byIMMlZyoFYsWFXcsMaC7814",
+     "name": "read_file",
+     "arguments": {
+      "offset": 271,
+      "limit": 50,
+      "path": "/testbed/pylint/checkers/base/comparison_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_byIMMlZyoFYsWFXcsMaC7814",
+     "content": "   271\t    def _check_callable_comparison(self, node: nodes.Compare) -> None:\n   272\t        operator = node.ops[0][0]\n   273\t        if operator not in COMPARISON_OPERATORS:\n   274\t            return\n   275\t\n   276\t        bare_callables = (nodes.FunctionDef, nodes.Lambda, astroid.BoundMethod)\n   277\t        left_operand, right_operand = node.left, node.ops[0][1]\n   278\t        # this message should be emitted only when there is comparison of bare callable\n   279\t        # with non bare callable.\n   280\t        number_of_bare_callables = 0\n   281\t        for operand in left_operand, right_operand:\n   282\t            inferred = utils.safe_infer(operand)\n   283\t            if not isinstance(inferred, bare_callables):\n   284\t                continue\n   285\t            if isinstance(inferred, astroid.BoundMethod):\n   286\t                # A BoundMethod may proxy a Lambda (e.g. a lambda assigned as a\n   287\t                # class attribute and accessed through an instance). Lambdas have\n   288\t                # no `decoratornames()` and their body is a single expression\n   289\t                # rather than a list of statements, so unwrap the proxy first.\n   290\t                while isinstance(\n   291\t                    inferred, (astroid.BoundMethod, astroid.UnboundMethod)\n   292\t                ):\n   293\t                    inferred = inferred._proxied\n   294\t            if isinstance(inferred, nodes.Lambda):\n   295\t                number_of_bare_callables += 1\n   296\t                continue\n   297\t            # Ignore callables that raise, as well as typing constants\n   298\t            # implemented as functions (that raise via their decorator)\n   299\t            if (\n   300\t                \"typing._SpecialForm\" not in inferred.decoratornames()\n   301\t                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n   302\t            ):\n   303\t                number_of_bare_callables += 1\n   304\t        if number_of_bare_callables == 1:\n   305\t            self.add_message(\"comparison-with-callable\", node=node)\n   306\t\n   307\t    @utils.only_required_for_messages(\n   308\t        \"singleton-comparison\",\n   309\t        \"unidiomatic-typecheck\",\n   310\t        \"literal-comparison\",\n   311\t        \"comparison-with-itself\",\n   312\t        \"comparison-of-constants\",\n   313\t        \"comparison-with-callable\",\n   314\t        \"nan-comparison\",\n   315\t    )\n   316\t    def visit_compare(self, node: nodes.Compare) -> None:\n   317\t        self._check_callable_comparison(node)\n   318\t        self._check_logical_tautology(node)\n   319\t        self._check_unidiomatic_typecheck(node)\n   320\t        self._check_constants_comparison(node)\n[file has 372 lines; continue with offset=321]",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_1xq9F47wtZpJZvdooxvb8771",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/t.py 2>&1 | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_1xq9F47wtZpJZvdooxvb8771",
+     "content": "exit 0\n************* Module t\nt.py:5:15: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nt.py:13:6: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nt.py:14:6: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n------------------------------------------------------------------\nYour code has been rated at 6.67/10 (previous run: 0.00/10, +6.67)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_8i4djerFPK30h6mN9ye77234",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/test_functional.py -k \"comparison_with_callable\" -q 2>&1 | tail -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_8i4djerFPK30h6mN9ye77234",
+     "content": "exit 0\n..                                                                       [100%]\n2 passed, 900 deselected in 0.30s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_e4RIPT6x8V604nhp0twx1000",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rln \"comparison-with-callable\\|_check_callable_comparison\\|ComparisonChecker\" tests/ | grep -v functional/c/ | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_e4RIPT6x8V604nhp0twx1000",
+     "content": "exit 0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_76FClbcKMutvbA6Npn1r8540",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/t2.py 2>&1 | head -10"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_76FClbcKMutvbA6Npn1r8540",
+     "content": "exit 0\n************* Module t2\nt2.py:8:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n------------------------------------------------------------------\nYour code has been rated at 8.75/10 (previous run: 8.75/10, +0.00)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_GS8Sfjac9O7M1apqWy5j9565",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/test_functional.py -k \"comparison\" -q 2>&1 | tail -10"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_GS8Sfjac9O7M1apqWy5j9565",
+     "content": "exit 0\n.............                                                            [100%]\n13 passed, 889 deselected in 0.65s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_5u1EQF3Jc3oqtGJjSaD23944",
+     "name": "write_file",
+     "arguments": {
+      "content": "class C:\n    lam = lambda self: 1\n    lam2 = lambda self: 2\n\n    def check(self):\n        return self.lam == 1\n\n\nc = C()\nif c.lam == 1:  # [comparison-with-callable]\n    pass\nif C.lam == 1:  # [comparison-with-callable]\n    pass\nif c.lam == c.lam2:\n    pass\nif c.lam == c.check:\n    pass\n\nf = lambda: 1\ng = lambda: 2\nif f == 1:  # [comparison-with-callable]\n    pass\nif f == g:\n    pass\nif f == C.check:\n    pass\n",
+      "path": "/tmp/edge.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_5u1EQF3Jc3oqtGJjSaD23944",
+     "content": "wrote 413 bytes to /tmp/edge.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_sBf2wDP0QlhV2PtvfPLy4160",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/edge.py 2>&1 | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_sBf2wDP0QlhV2PtvfPLy4160",
+     "content": "exit 0\n************* Module edge\nedge.py:6:15: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nedge.py:10:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nedge.py:12:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nedge.py:21:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nedge.py:25:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n-----------------------------------\nYour code has been rated at 7.73/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ZSlPZFWPvHI2e2bzLIZx6402",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"== .*method\\|!= .*method\\|method ==\\|method !=\\|\\.method ==\" tests/functional/ --include=*.py | grep -v \"comparison_with_callable\" | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ZSlPZFWPvHI2e2bzLIZx6402",
+     "content": "exit 0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_GZxBHQq39OfVVDd5m9kx8494",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && timeout 1200 python -m pytest tests/test_functional.py -q 2>&1 | tail -15",
+      "timeout": 1300
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_GZxBHQq39OfVVDd5m9kx8494",
+     "content": "exit 0\n\nself = <pylint.testutils.lint_module_test.LintModuleTest object at 0xffff956e4980>\n\n    def runTest(self) -> None:\n>       self._runTest()\nE       AssertionError: Wrong message(s) raised for \"consider_refactoring_into_while_condition.py\":\nE       \nE       Unexpected in testdata:\nE        166: comparison-with-callable (times 1)\nE        170: comparison-with-callable (times 1)\n\npylint/testutils/lint_module_test.py:145: AssertionError\n=========================== short test summary info ============================\nFAILED tests/test_functional.py::test_functional[consider_refactoring_into_while_condition]\n1 failed, 884 passed, 17 skipped in 19.57s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_BVaUCgGdWoDgd4iBudZb4724",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '150,175p' tests/functional/r/refactoring/consider_refactoring_into_while_condition.py 2>/dev/null || find /testbed -name \"consider_refactoring_into_while_condition.py\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_BVaUCgGdWoDgd4iBudZb4724",
+     "content": "exit 0\n/testbed/pylint/extensions/consider_refactoring_into_while_condition.py\n/testbed/tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py\n/testbed/build/lib/pylint/extensions/consider_refactoring_into_while_condition.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_VyhJQxQwAMmhgCUV3rUS5198",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && sed -n '150,175p' tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_VyhJQxQwAMmhgCUV3rUS5198",
+     "content": "exit 0\n        while True:  # [consider-refactoring-into-while-condition]\r\n            if k < 1:\r\n                break\r\n            k -= 1\r\n\r\n    def test_error_message_15(self):\r\n        k = 1\r\n        while True:  # [consider-refactoring-into-while-condition]\r\n            if k <= 1:\r\n                break\r\n            k -= 1\r\n\r\n    def test_error_message_16(self):\r\n        # Silly example but needed for coverage\r\n        k = None\r\n        while True:  # [consider-refactoring-into-while-condition]\r\n            if (lambda x: x) == k:\r\n                break\r\n            break\r\n        while True:  # [consider-refactoring-into-while-condition]\r\n            if k == (lambda x: x):\r\n                break\r\n            break\r\n\r\n    def test_error_message_17(self):\r\n        a = True\r\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_x4zZdSANhRLHlTfQKRdV4257",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && head -20 tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py && echo ---- && cat tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.txt | grep -n \"comparison-with-callable\" ; echo \"grep done\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_x4zZdSANhRLHlTfQKRdV4257",
+     "content": "exit 0\n\"\"\"Emit a message for breaking out of a while True loop immediately.\"\"\"\r\n# pylint: disable=missing-function-docstring,missing-class-docstring,unrecognized-inline-option,invalid-name,literal-comparison, undefined-variable, too-many-public-methods, no-else-break\r\n\r\nclass Issue8015:\r\n    def bad(self):\r\n        k = 1\r\n        while 1:  # [consider-refactoring-into-while-condition]\r\n            if k == 10:\r\n                break\r\n            k += 1\r\n\r\n    def another_bad(self):\r\n        current_scope = None\r\n        while 2:  # [consider-refactoring-into-while-condition]\r\n            if current_scope is None:\r\n                break\r\n            current_scope = True\r\n\r\n    def good(self):\r\n        k = 1\r\n----\ngrep done\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_2OfXWd3DoRd9tBugGrO45985",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"lambda\" tests/functional --include=*.py | grep -iE \"==|!=|self\\.\\w*lam|\\w*\\.\\w*lam\" | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_2OfXWd3DoRd9tBugGrO45985",
+     "content": "exit 0\ntests/functional/r/regression/regression_9865_calling_bound_lambda.py:4:    eq = lambda self, y: self == y\ntests/functional/d/defined_and_used_on_same_line.py:22:func4 = lambda a, b: a != b\ntests/functional/u/use/use_implicit_booleaness_not_comparison_to_string.py:65:    filter(lambda: X != \"\", [])  # [use-implicit-booleaness-not-comparison-to-string]\ntests/functional/u/use/use_implicit_booleaness_not_comparison_to_string.py:94:    lambda: X != \"\"  # [use-implicit-booleaness-not-comparison-to-string]\ntests/functional/u/use/use_implicit_booleaness_not_comparison_to_string.py:96:    filter(lambda x: x, [X != \"\"])  # [use-implicit-booleaness-not-comparison-to-string]\ntests/functional/u/use/use_implicit_booleaness_not_comparison_to_zero.py:89:    filter(lambda: X != 0, [])  # [use-implicit-booleaness-not-comparison-to-zero]\ntests/functional/u/use/use_implicit_booleaness_not_comparison_to_zero.py:118:    lambda: X != 0  # [use-implicit-booleaness-not-comparison-to-zero]\ntests/functional/u/use/use_implicit_booleaness_not_comparison_to_zero.py:120:    filter(lambda x: x, [X != 0])  # [use-implicit-booleaness-not-comparison-to-zero]\ntests/functional/u/use/use_implicit_booleaness_not_comparison.py:277:    filter(lambda: empty_list != [], [])  # [use-implicit-booleaness-not-comparison]\ntests/functional/u/use/use_implicit_booleaness_not_comparison.py:305:    lambda: empty_list != []  # [use-implicit-booleaness-not-comparison]\ntests/functional/u/use/use_implicit_booleaness_not_comparison.py:307:    filter(lambda x: x, [empty_list != []])  # [use-implicit-booleaness-not-comparison]\ntests/functional/c/cellvar_escaping_loop.py:93:        next(filter(lambda j, ix=i[0]: j == ix, [1, 3]))\ntests/functional/ext/mccabe/mccabe.py:145:    f = lambda x: [x for x in lst if x % 2 == 0] or range(10)\ntests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py:166:            if (lambda x: x) == k:\r\ntests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py:170:            if k == (lambda x: x):\r\ntests/functional/n/not_callable.py:113:PROP1.get_lambda()\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_8BTLE3QCPS7S0i6Ns5ZS7591",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && cat tests/functional/r/regression/regression_9865_calling_bound_lambda.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_8BTLE3QCPS7S0i6Ns5ZS7591",
+     "content": "exit 0\n\"\"\"Regression for https://github.com/pylint-dev/pylint/issues/9865.\"\"\"\n# pylint: disable=missing-docstring,too-few-public-methods,unnecessary-lambda-assignment\nclass C:\n    eq = lambda self, y: self == y\n\ndef test_lambda_method():\n    ret = C().eq(1)\n    return ret\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "text",
+     "text": "The full suite revealed a regression: an existing functional test expects bare `lambda` comparisons to **not** emit this message. So bare lambdas should not be treated as callables here; the fix should only make `BoundMethod`-wrapping-`Lambda` (the crash case) safe. Let me adjust:"
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_00_GU6LRbX60clZ5zfLBipw4811",
+     "name": "edit_file",
+     "arguments": {
+      "path": "/testbed/pylint/checkers/base/comparison_checker.py",
+      "new": "        bare_callables = (nodes.FunctionDef, astroid.BoundMethod)\n        left_operand, right_operand = node.left, node.ops[0][1]\n        # this message should be emitted only when there is comparison of bare callable\n        # with non bare callable.\n        number_of_bare_callables = 0\n        for operand in left_operand, right_operand:\n            inferred = utils.safe_infer(operand)\n            if not isinstance(inferred, bare_callables):\n                continue\n            if isinstance(inferred, astroid.BoundMethod):\n                # A BoundMethod can proxy a Lambda (e.g. a lambda assigned as a\n                # class attribute and accessed through an instance). Lambdas have\n                # no `decoratornames()` and their body is a single expression\n                # rather than a list of statements, so detect them via the\n                # proxied node to avoid accessing those FunctionDef attributes.\n                proxied = inferred._proxied\n                while isinstance(\n                    proxied, (astroid.BoundMethod, astroid.UnboundMethod)\n                ):\n                    proxied = proxied._proxied\n                if isinstance(proxied, nodes.Lambda):\n                    number_of_bare_callables += 1\n                    continue\n            # Ignore callables that raise, as well as typing constants\n            # implemented as functions (that raise via their decorator)\n            if (\n                \"typing._SpecialForm\" not in inferred.decoratornames()\n                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n            ):\n                number_of_bare_callables += 1",
+      "old": "        bare_callables = (nodes.FunctionDef, nodes.Lambda, astroid.BoundMethod)\n        left_operand, right_operand = node.left, node.ops[0][1]\n        # this message should be emitted only when there is comparison of bare callable\n        # with non bare callable.\n        number_of_bare_callables = 0\n        for operand in left_operand, right_operand:\n            inferred = utils.safe_infer(operand)\n            if not isinstance(inferred, bare_callables):\n                continue\n            if isinstance(inferred, astroid.BoundMethod):\n                # A BoundMethod may proxy a Lambda (e.g. a lambda assigned as a\n                # class attribute and accessed through an instance). Lambdas have\n                # no `decoratornames()` and their body is a single expression\n                # rather than a list of statements, so unwrap the proxy first.\n                while isinstance(\n                    inferred, (astroid.BoundMethod, astroid.UnboundMethod)\n                ):\n                    inferred = inferred._proxied\n            if isinstance(inferred, nodes.Lambda):\n                number_of_bare_callables += 1\n                continue\n            # Ignore callables that raise, as well as typing constants\n            # implemented as functions (that raise via their decorator)\n            if (\n                \"typing._SpecialForm\" not in inferred.decoratornames()\n                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n            ):\n                number_of_bare_callables += 1"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_GU6LRbX60clZ5zfLBipw4811",
+     "content": "edited /testbed/pylint/checkers/base/comparison_checker.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_txzJTOqfAotTYIE6zItW6337",
+     "name": "read_file",
+     "arguments": {
+      "limit": 40,
+      "offset": 271,
+      "path": "/testbed/pylint/checkers/base/comparison_checker.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_txzJTOqfAotTYIE6zItW6337",
+     "content": "   271\t    def _check_callable_comparison(self, node: nodes.Compare) -> None:\n   272\t        operator = node.ops[0][0]\n   273\t        if operator not in COMPARISON_OPERATORS:\n   274\t            return\n   275\t\n   276\t        bare_callables = (nodes.FunctionDef, astroid.BoundMethod)\n   277\t        left_operand, right_operand = node.left, node.ops[0][1]\n   278\t        # this message should be emitted only when there is comparison of bare callable\n   279\t        # with non bare callable.\n   280\t        number_of_bare_callables = 0\n   281\t        for operand in left_operand, right_operand:\n   282\t            inferred = utils.safe_infer(operand)\n   283\t            if not isinstance(inferred, bare_callables):\n   284\t                continue\n   285\t            if isinstance(inferred, astroid.BoundMethod):\n   286\t                # A BoundMethod can proxy a Lambda (e.g. a lambda assigned as a\n   287\t                # class attribute and accessed through an instance). Lambdas have\n   288\t                # no `decoratornames()` and their body is a single expression\n   289\t                # rather than a list of statements, so detect them via the\n   290\t                # proxied node to avoid accessing those FunctionDef attributes.\n   291\t                proxied = inferred._proxied\n   292\t                while isinstance(\n   293\t                    proxied, (astroid.BoundMethod, astroid.UnboundMethod)\n   294\t                ):\n   295\t                    proxied = proxied._proxied\n   296\t                if isinstance(proxied, nodes.Lambda):\n   297\t                    number_of_bare_callables += 1\n   298\t                    continue\n   299\t            # Ignore callables that raise, as well as typing constants\n   300\t            # implemented as functions (that raise via their decorator)\n   301\t            if (\n   302\t                \"typing._SpecialForm\" not in inferred.decoratornames()\n   303\t                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n   304\t            ):\n   305\t                number_of_bare_callables += 1\n   306\t        if number_of_bare_callables == 1:\n   307\t            self.add_message(\"comparison-with-callable\", node=node)\n   308\t\n   309\t    @utils.only_required_for_messages(\n   310\t        \"singleton-comparison\",\n[file has 374 lines; continue with offset=311]",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_SpP8kGB7G8ttzSr7ibkx2397",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/t.py 2>&1 | head -15"
+     }
+    },
+    {
+     "kind": "tool_call",
+     "id": "call_01_iQvBn38PGEepwl0qIhz60486",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/edge.py 2>&1 | head -15"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_SpP8kGB7G8ttzSr7ibkx2397",
+     "content": "exit 0\n************* Module t\nt.py:5:15: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nt.py:14:6: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n------------------------------------------------------------------\nYour code has been rated at 7.78/10 (previous run: 6.67/10, +1.11)\n\n",
+     "is_error": false
+    },
+    {
+     "kind": "tool_result",
+     "call_id": "call_01_iQvBn38PGEepwl0qIhz60486",
+     "content": "exit 0\n************* Module edge\nedge.py:6:15: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nedge.py:10:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n------------------------------------------------------------------\nYour code has been rated at 9.09/10 (previous run: 7.73/10, +1.36)\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_GRTJd8kPhB9dwJvXvTX09577",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && timeout 1200 python -m pytest tests/test_functional.py -q 2>&1 | tail -8",
+      "timeout": 1300
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_GRTJd8kPhB9dwJvXvTX09577",
+     "content": "exit 0\n........................................................................ [ 55%]\n........................................................................ [ 63%]\n..................................s................s.................... [ 71%]\n...................................s..ss................................ [ 79%]\n....................s.....s.......................................sss... [ 87%]\n............................................................s......s.... [ 95%]\n......................................                                   [100%]\n885 passed, 17 skipped in 20.86s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ucp4yZ1JiKXeSr0Vf7qJ8284",
+     "name": "write_file",
+     "arguments": {
+      "content": "# pylint: disable=missing-docstring,invalid-name\nfrom typing import Any, Optional\n\n\ndef foo():\n    return None\n\n\ndef eventually_raise():\n    raise Exception\n\n\nclass C:\n    lam = lambda self: 1\n\n    def method(self):\n        return 1\n\n\nobj = C()\n\n# should emit\nif obj.method == 1:  # [comparison-with-callable]\n    pass\nif obj.lam == 1:  # [comparison-with-callable]\n    pass\nif foo == 1:  # [comparison-with-callable]\n    pass\n\n# should NOT emit\nif obj.lam == obj.method:\n    pass\nif obj.lam == obj.lam:\n    pass\nif C.lam == 1:\n    pass\nif a == eventually_raise:\n    pass\n\na = 1\ndef check_any(type_):\n    return type_ == Any\n\n\ndef check_optional(type_):\n    return type_ == Optional\n",
+      "path": "/tmp/verify.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ucp4yZ1JiKXeSr0Vf7qJ8284",
+     "content": "wrote 683 bytes to /tmp/verify.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_RpBP5cWOuhZZ6UrtssWT8393",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/verify.py 2>&1 | head -15"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_RpBP5cWOuhZZ6UrtssWT8393",
+     "content": "exit 0\n************* Module verify\nverify.py:23:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nverify.py:25:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nverify.py:27:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n-----------------------------------\nYour code has been rated at 8.97/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_7yMmaYsipPlWCt3TDa9d7028",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && python -m pytest tests/test_functional.py -k \"comparison or consider_refactoring_into_while_condition\" -q 2>&1 | tail -6"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_7yMmaYsipPlWCt3TDa9d7028",
+     "content": "exit 0\n...............                                                          [100%]\n15 passed, 887 deselected in 0.68s\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_qcyWtCAWAjuazNCI4t7b9170",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls tests/ | head -40 && ls tests/checkers 2>/dev/null | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_qcyWtCAWAjuazNCI4t7b9170",
+     "content": "exit 0\n__pycache__\nbenchmark\ncheckers\nconfig\nconftest.py\ndata\nextensions\nfunctional\ninput\nlint\nmessage\nmessages\nprimer\npyreverse\nregrtest_data\nreporters\ntest_check_parallel.py\ntest_func.py\ntest_functional.py\ntest_functional_directories.py\ntest_import_graph.py\ntest_numversion.py\ntest_pragma_parser.py\ntest_pylint_runners.py\ntest_regr.py\ntest_self.py\ntest_similar.py\ntestutils\nutils\n__init__.py\nbase\nconftest.py\nunittest_base_checker.py\nunittest_deprecated.py\nunittest_design.py\nunittest_format.py\nunittest_imports.py\nunittest_misc.py\nunittest_non_ascii_name.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_YwxWOQdv9gqGX9NRPDmS8202",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls tests/checkers/base/"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_YwxWOQdv9gqGX9NRPDmS8202",
+     "content": "exit 0\nunittest_base.py\nunittest_multi_naming_style.py\nunittest_name_preset.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_87g9XpSImMPm3a9Dd7xM9080",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"11055\\|comparison-with-callable\" doc/whatsnew/ 2>/dev/null | head; grep -rn \"lambda\" doc/whatsnew/4/ 2>/dev/null | grep -i \"comparison\\|callable\" | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_87g9XpSImMPm3a9Dd7xM9080",
+     "content": "exit 0\ndoc/whatsnew/2/2.0/full.rst:120:* Add ``comparison-with-callable`` to warn for comparison with bare callable, without calling it.\ndoc/whatsnew/2/2.0/summary.rst:37:* A new check was added, ``comparison-with-callable``.\ndoc/whatsnew/2/2.13/full.rst:609:* Fix ``comparison-with-callable`` false positive for callables that raise, such\ndoc/whatsnew/2/2.13/summary.rst:498:* Fix ``comparison-with-callable`` false positive for callables that raise, such\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_zisQS9skiWrqiCjSUmGS1264",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show --stat d6eb4812f | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_zisQS9skiWrqiCjSUmGS1264",
+     "content": "exit 0\ncommit d6eb4812f4a02c24d4ab986489304048618852a8\nAuthor: Millefeuille <millefeuille42@proton.me>\nDate:   Sun May 31 16:47:42 2026 +0200\n\n    fix: use metaclass __call__ signature on class instantiation (#11055)\n    \n    Fixes a E1121 (too-many-function-args),\n    a E1120 (no-value-for-parameter) and probaly other false positives\n    related to the function signature,\n    that triggers when a class uses a metaclass\n    that overrides `__call__` with a different signature.\n    \n    This was caused by `_determine_callable`\n    in `pylint/checkers/typecheck.py` that was not checking for the\n    potential metaclass and their potential `__call__` override\n    and rather solely checked `__init__` and `__new__`.\n    Adding a check for it's existence and returning it\n    solved the false positives.\n    \n    Signed-off-by: Millefeuille <millefeuille42@proton.me>\n\n doc/whatsnew/fragments/11032.false_positive       |  3 ++\n pylint/checkers/typecheck.py                      | 48 ++++++++++++++++-------\n tests/functional/a/arguments.py                   | 21 ++++++++++\n tests/functional/a/arguments.txt                  |  2 +\n tests/functional/t/too/too_many_function_args.py  | 19 +++++++++\n tests/functional/t/too/too_many_function_args.txt |  1 +\n 6 files changed, 80 insertions(+), 14 deletions(-)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_bkEJnjrBwPgwfws2J7K92893",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && diff -u build/lib/pylint/checkers/base/comparison_checker.py pylint/checkers/base/comparison_checker.py | head -80"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_bkEJnjrBwPgwfws2J7K92893",
+     "content": "exit 0\n--- build/lib/pylint/checkers/base/comparison_checker.py\t2026-09-03 12:21:48.000000000 +0000\n+++ pylint/checkers/base/comparison_checker.py\t2026-09-03 13:28:33.369590002 +0000\n@@ -280,11 +280,26 @@\n         number_of_bare_callables = 0\n         for operand in left_operand, right_operand:\n             inferred = utils.safe_infer(operand)\n+            if not isinstance(inferred, bare_callables):\n+                continue\n+            if isinstance(inferred, astroid.BoundMethod):\n+                # A BoundMethod can proxy a Lambda (e.g. a lambda assigned as a\n+                # class attribute and accessed through an instance). Lambdas have\n+                # no `decoratornames()` and their body is a single expression\n+                # rather than a list of statements, so detect them via the\n+                # proxied node to avoid accessing those FunctionDef attributes.\n+                proxied = inferred._proxied\n+                while isinstance(\n+                    proxied, (astroid.BoundMethod, astroid.UnboundMethod)\n+                ):\n+                    proxied = proxied._proxied\n+                if isinstance(proxied, nodes.Lambda):\n+                    number_of_bare_callables += 1\n+                    continue\n             # Ignore callables that raise, as well as typing constants\n             # implemented as functions (that raise via their decorator)\n             if (\n-                isinstance(inferred, bare_callables)\n-                and \"typing._SpecialForm\" not in inferred.decoratornames()\n+                \"typing._SpecialForm\" not in inferred.decoratornames()\n                 and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n             ):\n                 number_of_bare_callables += 1\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_EhlVyxnbkaZIZF2g8DWn6840",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls doc/whatsnew/fragments/ | head -50; ls doc/whatsnew/fragments/ | wc -l"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_EhlVyxnbkaZIZF2g8DWn6840",
+     "content": "exit 0\n10037.bugfix\n10099.bugfix\n10589.bugfix\n10642.bugfix\n10665.false_positive\n10703.false_positive\n10743.false_positive\n10752.false_positive\n10772.feature\n10785.false_positive\n10788.false_positive\n10790.false_positive\n10791.false_positive\n10794.false_positive\n10801.bugfix\n10803.feature\n10823.false_positive\n10825.bugfix\n10857.bugfix\n10881.performance\n10886.performance\n10890.false_positive\n10892.bugfix\n10914.internal\n10933.false_positive\n10960.false_positive\n10969.bugfix\n10980.false_positive\n10996.bugfix\n11015.false_positive\n11018.breaking\n11020.bugfix\n11022.bugfix\n11023.bugfix\n11025.bugfix\n11028.bugfix\n11031.bugfix\n11032.false_positive\n11037.false_positive\n11056.bugfix\n11059.bugfix\n11069.bugfix\n11070.bugfix\n11071.bugfix\n11090.bugfix\n11099.bugfix\n11102.bugfix\n11130.bugfix\n11134.bugfix\n11136.bugfix\n76\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_mcYlE5pB3pu0FJQn9Zh09622",
+     "name": "bash",
+     "arguments": {
+      "command": "python - <<'EOF'\nimport astroid\nfrom astroid import nodes\nimport inspect\nprint(inspect.getfile(nodes.Lambda))\nprint(nodes.Lambda.__mro__[:4])\n# see if older astroid considered Lambda a FunctionDef\nprint(\"issubclass Lambda FunctionDef:\", issubclass(nodes.Lambda, nodes.FunctionDef))\nEOF\ngrep -rn \"class Lambda\" /opt/venv/lib/python3.12/site-packages/astroid/nodes/scoped_nodes/scoped_nodes.py | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_mcYlE5pB3pu0FJQn9Zh09622",
+     "content": "exit 0\n/opt/venv/lib/python3.12/site-packages/astroid/nodes/scoped_nodes/scoped_nodes.py\n(<class 'astroid.nodes.scoped_nodes.scoped_nodes.Lambda'>, <class 'astroid.nodes._base_nodes.FilterStmtsBaseNode'>, <class 'astroid.nodes.scoped_nodes.mixin.LocalsDictNodeNG'>, <class 'astroid.nodes._base_nodes.LookupMixIn'>)\nissubclass Lambda FunctionDef: False\n881:class Lambda(_base_nodes.FilterStmtsBaseNode, LocalsDictNodeNG):\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_P3eClxyPbvjtJP1GRnqU8765",
+     "name": "bash",
+     "arguments": {
+      "command": "find / -name \"scoped_nodes.py\" -path \"*astroid*\" 2>/dev/null; pip cache list 2>/dev/null | grep -i astroid | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_P3eClxyPbvjtJP1GRnqU8765",
+     "content": "exit 0\n/opt/venv/lib/python3.12/site-packages/astroid/nodes/scoped_nodes/scoped_nodes.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_QvKSPlTrmBcBMdVecDSj1272",
+     "name": "bash",
+     "arguments": {
+      "command": "find /root/.cache -iname \"*astroid*\" 2>/dev/null | head; find / -iname \"astroid-2*.whl\" -o -iname \"astroid-3*.whl\" 2>/dev/null | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_QvKSPlTrmBcBMdVecDSj1272",
+     "content": "exit 0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_yvnlLBXc4a8jU1c3A0d58319",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline --all -- tests/functional/c/comparison_with_callable.py | head -20; echo ----; git log --oneline --all -S \"nodes.Lambda\" -- pylint/checkers/base/comparison_checker.py | head; echo ----; git log --oneline --all -S \"Lambda\" -- pylint/checkers/base/basic_checker.py | head -5"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_yvnlLBXc4a8jU1c3A0d58319",
+     "content": "exit 0\n3c180dff0 Rename `broad-except` and new check `broad-exception-raised` (#7709)\n82d55aee4 Remove Python 2 code from the tests & refactor (#7320)\n66fcbeb9f Move no-self-use to optional extension (#6448)\n6486514dc Add `comparison-of-constants` checker (#6413)\n2a6938735 Fix #5557: Don't emit `comparison-with-callable` if the callable raises (#5563)\n48d584bab Move ``misplaced-comparison-constant`` to optional extension (#5298)\na46d366a4 Rename blacklisted-name to disallowed-name\n997d9d1ec [functional tests] Rename example_functional_tests.py => e/example_functional_tests.py\n----\n----\na29a2ab06 Fix false positive for 'used-before-assignment' with terminating func (#7784)\nbed42badf Detect unreachable code after sys.exit, quit, exit, and os._exit (#7520)\n4295d419a Add typing to ``basic_checker``\n1e7d3fa62 [refactor] Create a file for the BasicChecker in pylint.checker.base\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_nEqNli3Tt2huTlFqZMta0890",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline --all -S \"bare_callables\" -- pylint/ | head; echo ----; git show 2a6938735:pylint/checkers/base/checkers/base_checker.py 2>/dev/null | grep -n \"bare_callables\" "
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_nEqNli3Tt2huTlFqZMta0890",
+     "content": "exit 1\n977b08d16 [refactor] Create files for comparison checker in pylint.checker.base\n2a6938735 Fix #5557: Don't emit `comparison-with-callable` if the callable raises (#5563)\nc421fdd8a incorporate review comments.\n10fd4f71e use safe_infer as suggested in review comments. also add two more test cases.\n----\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_6VkQspWHzeZRPtgBydkp2602",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show 2a6938735 --stat | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_6VkQspWHzeZRPtgBydkp2602",
+     "content": "exit 0\ncommit 2a69387352bd1c941759faaa22458de3609b7627\nAuthor: Jacob Walls <jacobtylerwalls@gmail.com>\nDate:   Tue Dec 21 08:58:15 2021 -0500\n\n    Fix #5557: Don't emit `comparison-with-callable` if the callable raises (#5563)\n    \n    * Fix #5557: Don't emit `comparison-with-callable` if the callable raises\n    Typing constants such as `typing.Any` raise when called.\n    \n    Co-authored-by: Pierre Sassoulas <pierre.sassoulas@gmail.com>\n    Co-authored-by: Dani\u00ebl van Noord <13665637+DanielNoord@users.noreply.github.com>\n\n ChangeLog                                            |  5 +++++\n doc/whatsnew/2.13.rst                                |  5 +++++\n pylint/checkers/base.py                              | 20 ++++++++++++--------\n tests/functional/c/comparison_with_callable.py       | 11 +++++++++++\n .../c/comparison_with_callable_typing_constants.py   | 18 ++++++++++++++++++\n 5 files changed, 51 insertions(+), 8 deletions(-)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_36GfpRjRzth8vmYAZmDs8864",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show 2a6938735 -- pylint/checkers/base.py | head -80"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_36GfpRjRzth8vmYAZmDs8864",
+     "content": "exit 0\ncommit 2a69387352bd1c941759faaa22458de3609b7627\nAuthor: Jacob Walls <jacobtylerwalls@gmail.com>\nDate:   Tue Dec 21 08:58:15 2021 -0500\n\n    Fix #5557: Don't emit `comparison-with-callable` if the callable raises (#5563)\n    \n    * Fix #5557: Don't emit `comparison-with-callable` if the callable raises\n    Typing constants such as `typing.Any` raise when called.\n    \n    Co-authored-by: Pierre Sassoulas <pierre.sassoulas@gmail.com>\n    Co-authored-by: Dani\u00ebl van Noord <13665637+DanielNoord@users.noreply.github.com>\n\ndiff --git a/pylint/checkers/base.py b/pylint/checkers/base.py\nindex 9d61cf10f..46eb0d17d 100644\n--- a/pylint/checkers/base.py\n+++ b/pylint/checkers/base.py\n@@ -2511,14 +2511,18 @@ class ComparisonChecker(_BasicChecker):\n         left_operand, right_operand = node.left, node.ops[0][1]\n         # this message should be emitted only when there is comparison of bare callable\n         # with non bare callable.\n-        if (\n-            sum(\n-                1\n-                for operand in (left_operand, right_operand)\n-                if isinstance(utils.safe_infer(operand), bare_callables)\n-            )\n-            == 1\n-        ):\n+        number_of_bare_callables = 0\n+        for operand in left_operand, right_operand:\n+            inferred = utils.safe_infer(operand)\n+            # Ignore callables that raise, as well as typing constants\n+            # implemented as functions (that raise via their decorator)\n+            if (\n+                isinstance(inferred, bare_callables)\n+                and \"typing._SpecialForm\" not in inferred.decoratornames()\n+                and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n+            ):\n+                number_of_bare_callables += 1\n+        if number_of_bare_callables == 1:\n             self.add_message(\"comparison-with-callable\", node=node)\n \n     @utils.check_messages(\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_p25fOyGpExN3bbObvmVK9346",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline --all -S \"bare_callables = (nodes.FunctionDef\" -- pylint/checkers/base.py pylint/checkers/base/*.py | head; echo ---; git show c421fdd8a -- pylint/checkers/base.py | grep -n \"bare_callables\" | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_p25fOyGpExN3bbObvmVK9346",
+     "content": "exit 0\n977b08d16 [refactor] Create files for comparison checker in pylint.checker.base\n6e2dbbf46 Use alias for astroid.nodes 01 (#4855)\n---\n44:-            bare_callables = (astroid.FunctionDef, astroid.BoundMethod)\n45:-            if (isinstance(node, bare_callables) or\n46:-                    isinstance(utils.safe_infer(node), bare_callables)):\n50:+        bare_callables = (astroid.FunctionDef, astroid.BoundMethod)\n52:-        bare_callables_count = [True for operand in (left_operand, right_operand)\n56:-        # len(bare_callables_count) == 2 means that comparison compares two bare\n58:-        # len(bare_callables_count) == 0 means that comparison compares two non bare\n60:-        if len(bare_callables_count) == 1:\n63:+                if isinstance(utils.safe_infer(operand), bare_callables)]) == 1:\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_xAsLCpArm1OLGsdnCsi54986",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline --all -S \"comparison-with-callable\" --reverse -- pylint | head; echo ----; git log --oneline --all --reverse -- tests/functional/c/comparison_with_callable.py | head -3"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_xAsLCpArm1OLGsdnCsi54986",
+     "content": "exit 0\n3e76fca8a Add new check `comparison-with-callable` This check warn for comparison with bare callable, without calling it.\n2540c7677 remove wrong test case.\n673793aea Add new check `comparison-with-callable` This check warn for comparison with bare callable, without calling it.\n33b8185a4 Stopped installing tests with package\n977b08d16 [refactor] Create files for comparison checker in pylint.checker.base\n----\n997d9d1ec [functional tests] Rename example_functional_tests.py => e/example_functional_tests.py\na46d366a4 Rename blacklisted-name to disallowed-name\n48d584bab Move ``misplaced-comparison-constant`` to optional extension (#5298)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_R4CfBPnJfTjk4U773UoJ2928",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show 3e76fca8a --stat | head; git show 3e76fca8a | grep -n \"bare_callables\\|Lambda\\|FunctionDef\" | head -30"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_R4CfBPnJfTjk4U773UoJ2928",
+     "content": "exit 0\ncommit 3e76fca8afbc0810ea82bc5d4b9185ac7f1b8989\nAuthor: ssolanki <sushobhitsolanki@gmail.com>\nDate:   Sun May 20 00:05:34 2018 +0530\n\n    Add new check `comparison-with-callable`\n    This check warn for comparison with bare callable, without calling it.\n\n CONTRIBUTORS.txt                                   |  1 +\n ChangeLog                                          |  4 ++\n doc/whatsnew/2.0.rst                               | 19 ++++++++\n95:+                if isinstance(item, astroid.FunctionDef):\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_b3LLdXzVwqgI5gjOh7e96837",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show 3e76fca8a | sed -n '70,130p'"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_b3LLdXzVwqgI5gjOh7e96837",
+     "content": "exit 0\n   exist on the function signature for a parameter and/or return type.\n \ndiff --git a/pylint/checkers/base.py b/pylint/checkers/base.py\nindex c4dfaeb17..419fd38ce 100644\n--- a/pylint/checkers/base.py\n+++ b/pylint/checkers/base.py\n@@ -1731,6 +1731,11 @@ class ComparisonChecker(_BasicChecker):\n                       'comparison-with-itself',\n                       'Used when something is compared against itself.',\n                       ),\n+            'W0143': ('Comparing bare callable, might have skipped parenthesis after callable',\n+                      'comparison-with-callable',\n+                      'Used when callable is used in a comparison without parenthesis, '\n+                      'which means instead of comparing result of callable, callable itself is compared',\n+                      ),\n \n             }\n \n@@ -1810,9 +1815,45 @@ class ComparisonChecker(_BasicChecker):\n             suggestion = \"%s %s %s\" % (left_operand, operator, right_operand)\n             self.add_message('comparison-with-itself', node=node, args=(suggestion,))\n \n+    def _check_callable_comparison(self, node):\n+        def get_all_callable(node, callables):\n+            for item in node:\n+                if isinstance(item, astroid.FunctionDef):\n+                    # skip properties as they calling them without parenthesis is valid case.\n+                    decorator = item.decorators.nodes[0] if item.decorators else None\n+                    if decorator and isinstance(decorator, astroid.Name):\n+                        decorator_name = decorator.name\n+                    elif decorator and isinstance(decorator, astroid.Name):\n+                        decorator_name = decorator.attrname\n+\n+                    if not decorator or not decorator_name in ('property', 'setter', 'deleter'):\n+                        callables.add(item.name)\n+                    print(decorator, callables)\n+                elif isinstance(item, astroid.ClassDef):\n+                    get_all_callable(item.body, callables)\n+\n+        functions = set()\n+        get_all_callable(node.frame().body, functions)\n+\n+        left_operand, right_operand = node.left, node.ops[0][1]\n+\n+        names = []\n+        for operand in [left_operand, right_operand]:\n+            if isinstance(operand, astroid.Name) and operand.name in functions:\n+                names.append(operand.name)\n+            elif isinstance(operand, astroid.Attribute) and operand.attrname in functions:\n+                names.append(operand.attrname)\n+        print(functions, left_operand, right_operand, names)\n+        # len(names) == 2 means that comparison compares two bare callables which is valid\n+        if len(names) == 1:\n+            self.add_message('comparison-with-callable', node=node)\n+\n+\n     @utils.check_messages('singleton-comparison', 'misplaced-comparison-constant',\n-                          'unidiomatic-typecheck', 'literal-comparison', 'comparison-with-itself')\n+                          'unidiomatic-typecheck', 'literal-comparison', 'comparison-with-itself',\n+                          'comparison-with-callable')\n     def visit_compare(self, node):\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_C6GqETS0EsjBO5Heg7QX9405",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && grep -rn \"astroid\" pyproject.toml requirements_test_min.txt 2>/dev/null | head; grep -rn \"astroid==\" /opt/venv/lib/python3.12/site-packages/*.dist-info/METADATA 2>/dev/null | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_C6GqETS0EsjBO5Heg7QX9405",
+     "content": "exit 0\npyproject.toml:41:  # see https://github.com/pylint-dev/astroid/issues/1341\npyproject.toml:42:  \"astroid>=4.2.0b4,<=4.3\",\npyproject.toml:91:  \"astroid==4.2.0b4\",                   # Pinned to a specific version for tests\npyproject.toml:108:# https://github.com/pylint-dev/astroid/pull/2267#issuecomment-1666642781\npyproject.toml:171:known_third_party = [ \"platformdirs\", \"astroid\", \"sphinx\", \"isort\", \"pytest\", \"mccabe\", \"six\", \"toml\" ]\npyproject.toml:179:  \"astroid/**\",\npyproject.toml:239:  \"astroid.*\",\npyproject.toml:253:# For local tests: Enable follow_untyped_imports overwrite for astroid\npyproject.toml:255:# module = [\"astroid.*\"]\npyproject.toml:264:reportMissingImports = \"none\" # pytest / astroid are not detected\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_qB8UWwFRcyKNplQWZ5Q37873",
+     "name": "bash",
+     "arguments": {
+      "command": "ls /opt/venv/lib/python3.12/site-packages/astroid-4.2.0b4.dist-info/ 2>/dev/null; grep -in \"lambda\\|FunctionDef\" /opt/venv/lib/python3.12/site-packages/astroid-4.2.0b4.dist-info/METADATA 2>/dev/null | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_qB8UWwFRcyKNplQWZ5Q37873",
+     "content": "exit 0\nINSTALLER\nMETADATA\nRECORD\nREQUESTED\nWHEEL\nlicenses\ntop_level.txt\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_oBCKkgXTUauw9i1kWbkc7042",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git status --short && git diff --stat"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_oBCKkgXTUauw9i1kWbkc7042",
+     "content": "exit 0\n M pylint/checkers/base/comparison_checker.py\n pylint/checkers/base/comparison_checker.py | 19 +++++++++++++++++--\n 1 file changed, 17 insertions(+), 2 deletions(-)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_IkABKVEjT9ikCp1CpIMj9604",
+     "name": "bash",
+     "arguments": {
+      "command": "rm -f /tmp/t.py /tmp/t2.py /tmp/edge.py /tmp/verify.py; rm -rf /tmp/pipdl; ls /tmp | head"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_IkABKVEjT9ikCp1CpIMj9604",
+     "content": "exit 0\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ErjRxzCJb2AkvX9RRX7b6713",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git diff"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ErjRxzCJb2AkvX9RRX7b6713",
+     "content": "exit 0\ndiff --git a/pylint/checkers/base/comparison_checker.py b/pylint/checkers/base/comparison_checker.py\nindex 4867f8098..2a2d5b580 100644\n--- a/pylint/checkers/base/comparison_checker.py\n+++ b/pylint/checkers/base/comparison_checker.py\n@@ -280,11 +280,26 @@ class ComparisonChecker(_BasicChecker):\n         number_of_bare_callables = 0\n         for operand in left_operand, right_operand:\n             inferred = utils.safe_infer(operand)\n+            if not isinstance(inferred, bare_callables):\n+                continue\n+            if isinstance(inferred, astroid.BoundMethod):\n+                # A BoundMethod can proxy a Lambda (e.g. a lambda assigned as a\n+                # class attribute and accessed through an instance). Lambdas have\n+                # no `decoratornames()` and their body is a single expression\n+                # rather than a list of statements, so detect them via the\n+                # proxied node to avoid accessing those FunctionDef attributes.\n+                proxied = inferred._proxied\n+                while isinstance(\n+                    proxied, (astroid.BoundMethod, astroid.UnboundMethod)\n+                ):\n+                    proxied = proxied._proxied\n+                if isinstance(proxied, nodes.Lambda):\n+                    number_of_bare_callables += 1\n+                    continue\n             # Ignore callables that raise, as well as typing constants\n             # implemented as functions (that raise via their decorator)\n             if (\n-                isinstance(inferred, bare_callables)\n-                and \"typing._SpecialForm\" not in inferred.decoratornames()\n+                \"typing._SpecialForm\" not in inferred.decoratornames()\n                 and not any(isinstance(x, nodes.Raise) for x in inferred.body)\n             ):\n                 number_of_bare_callables += 1\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_EMq7QrAC0KTs10onYah32556",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && ls tests/functional/r/regression/ | grep 9865; cat tests/functional/r/regression/regression_9865_calling_bound_lambda.txt 2>/dev/null"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_EMq7QrAC0KTs10onYah32556",
+     "content": "exit 1\nregression_9865_calling_bound_lambda.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_TfSwNy9LNqBbeCGuD1mN7806",
+     "name": "write_file",
+     "arguments": {
+      "content": "# pylint: disable=missing-docstring,too-few-public-methods\nclass Raiser:\n    def boom(self):\n        raise Exception\n\nclass Normal:\n    def ok(self):\n        return 1\n\nr = Raiser()\nn = Normal()\nif r.boom == 1:\n    pass\nif n.ok == 1:  # [comparison-with-callable]\n    pass\nif n.ok == r.boom:\n    pass\n",
+      "path": "/tmp/verify2.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_TfSwNy9LNqBbeCGuD1mN7806",
+     "content": "wrote 300 bytes to /tmp/verify2.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_GnKEptq1S2uxco1qYZsD2924",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/verify2.py 2>&1 | head -10"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_GnKEptq1S2uxco1qYZsD2924",
+     "content": "exit 0\n************* Module verify2\nverify2.py:14:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\nverify2.py:16:3: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n-----------------------------------\nYour code has been rated at 8.57/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_k32wtjOCy06W6h7yW0Yy0463",
+     "name": "bash",
+     "arguments": {
+      "command": "rm -f /tmp/verify2.py; cd /testbed && git status --short"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_k32wtjOCy06W6h7yW0Yy0463",
+     "content": "exit 0\n M pylint/checkers/base/comparison_checker.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_7N2PVLLnskSz9aJqq9209339",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git log --oneline --all -- tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py | head -20"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_7N2PVLLnskSz9aJqq9209339",
+     "content": "exit 0\neb950615d Add `consider-refactoring-into-while-condition` checker (#8021)\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_Nv5QIK59MGq5cuuybmIQ9253",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show eb950615d:doc/whatsnew/fragments/8021.feature >/dev/null 2>&1; git show eb950615d --stat | head -30; git log --format='%H %ad' -1 --date=short eb950615d"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_Nv5QIK59MGq5cuuybmIQ9253",
+     "content": "exit 0\ncommit eb950615d77a6b979af6e0d9954fdb4197f4a722\nAuthor: yushao2 <36848472+yushao2@users.noreply.github.com>\nDate:   Sat Jan 28 01:08:08 2023 +0800\n\n    Add `consider-refactoring-into-while-condition` checker (#8021)\n    \n    \n    \n    Co-authored-by: Pierre Sassoulas <pierre.sassoulas@gmail.com>\n    Co-authored-by: Mark Byrne <31762852+mbyrnepr2@users.noreply.github.com>\n    Co-authored-by: Jacob Walls <jacobtylerwalls@gmail.com>\n\n .pyenchant_pylint_custom_dict.txt                  |   1 +\n .../bad.py                                         |   7 +\n .../good.py                                        |   5 +\n .../pylintrc                                       |   2 +\n doc/user_guide/checkers/extensions.rst             |  17 ++\n doc/user_guide/messages/messages_overview.rst      |   1 +\n doc/whatsnew/fragments/8015.new_check              |   5 +\n pylint/checkers/base/basic_error_checker.py        |   4 +-\n pylint/checkers/utils.py                           |  56 ++++\n .../consider_refactoring_into_while_condition.py   |  93 ++++++\n pylintrc                                           |   1 +\n .../consider_refactoring_into_while_condition.py   | 335 +++++++++++++++++++++\n .../consider_refactoring_into_while_condition.rc   |   2 +\n .../consider_refactoring_into_while_condition.txt  |  27 ++\n ...nsider_refactoring_into_while_condition_py38.py |  12 +\n ...nsider_refactoring_into_while_condition_py38.rc |   4 +\n ...sider_refactoring_into_while_condition_py38.txt |   2 +\n 17 files changed, 571 insertions(+), 3 deletions(-)\neb950615d77a6b979af6e0d9954fdb4197f4a722 2023-01-28\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_f2oVYmXCVlRt33XKICsO2222",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && git show eb950615d -- tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.py | grep -n \"lambda\" | head; echo ---; git show eb950615d:tests/functional/ext/consider_refactoring_into_while_condition/consider_refactoring_into_while_condition.txt | grep -n \"comparison-with-callable\"; echo \"txt grep done\""
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_f2oVYmXCVlRt33XKICsO2222",
+     "content": "exit 0\n184:+            if (lambda x: x) == k:\r\n188:+            if k == (lambda x: x):\r\n---\ntxt grep done\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_i9HW2ZfCihVCjy0O3VV93497",
+     "name": "bash",
+     "arguments": {
+      "command": "sed -n '860,940p' /opt/venv/lib/python3.12/site-packages/astroid/nodes/scoped_nodes/scoped_nodes.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_i9HW2ZfCihVCjy0O3VV93497",
+     "content": "exit 0\n            return \"classmethod\"\n        if result.is_subtype_of(\"builtins.staticmethod\"):\n            return \"staticmethod\"\n    if isinstance(result, FunctionDef):\n        if not result.decorators:\n            return None\n        # Determine if this function is decorated with one of the builtin descriptors we want.\n        for decorator in result.decorators.nodes:\n            if isinstance(decorator, node_classes.Name):\n                if decorator.name in BUILTIN_DESCRIPTORS:\n                    return decorator.name\n            if (\n                isinstance(decorator, node_classes.Attribute)\n                and isinstance(decorator.expr, node_classes.Name)\n                and decorator.expr.name == \"builtins\"\n                and decorator.attrname in BUILTIN_DESCRIPTORS\n            ):\n                return decorator.attrname\n    return None\n\n\nclass Lambda(_base_nodes.FilterStmtsBaseNode, LocalsDictNodeNG):\n    \"\"\"Class representing an :class:`ast.Lambda` node.\n\n    >>> import astroid\n    >>> node = astroid.extract_node('lambda arg: arg + 1')\n    >>> node\n    <Lambda.<lambda> l.1 at 0x7f23b2e41518>\n    \"\"\"\n\n    _astroid_fields: ClassVar[tuple[str, ...]] = (\"args\", \"body\")\n    _other_other_fields: ClassVar[tuple[str, ...]] = (\"locals\",)\n    name = \"<lambda>\"\n    is_lambda = True\n    special_attributes = FunctionModel()\n    \"\"\"The names of special attributes that this function has.\"\"\"\n\n    args: Arguments\n    \"\"\"The arguments that the function takes.\"\"\"\n\n    body: NodeNG\n    \"\"\"The contents of the function body.\"\"\"\n\n    def implicit_parameters(self) -> Literal[0]:\n        return 0\n\n    @property\n    def type(self) -> Literal[\"method\", \"function\"]:\n        \"\"\"Whether this is a method or function.\n\n        :returns: 'method' if this is a method, 'function' otherwise.\n        \"\"\"\n        if self.args.arguments and self.args.arguments[0].name == \"self\":\n            if self.parent and isinstance(self.parent.scope(), ClassDef):\n                return \"method\"\n        return \"function\"\n\n    def __init__(\n        self,\n        lineno: int,\n        col_offset: int,\n        parent: NodeNG,\n        *,\n        end_lineno: int | None,\n        end_col_offset: int | None,\n    ):\n        self.locals = {}\n        \"\"\"A map of the name of a local variable to the node defining it.\"\"\"\n\n        self.instance_attrs: dict[str, list[NodeNG]] = {}\n\n        super().__init__(\n            lineno=lineno,\n            col_offset=col_offset,\n            end_lineno=end_lineno,\n            end_col_offset=end_col_offset,\n            parent=parent,\n        )\n\n    def postinit(self, args: Arguments, body: NodeNG) -> None:\n        self.args = args\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ZFMnEfe1gB0iYFvkdx5g4219",
+     "name": "bash",
+     "arguments": {
+      "command": "find /opt/venv/lib/python3.12/site-packages/astroid -iname \"*.md\" -o -iname \"CHANGELOG*\" 2>/dev/null | head; grep -rn \"class FunctionDef\" /opt/venv/lib/python3.12/site-packages/astroid/nodes/scoped_nodes/scoped_nodes.py | head -3"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ZFMnEfe1gB0iYFvkdx5g4219",
+     "content": "exit 0\n1068:class FunctionDef(\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_h8SxQKBxDbE9kpBrD8a59514",
+     "name": "bash",
+     "arguments": {
+      "command": "sed -n '1060,1120p' /opt/venv/lib/python3.12/site-packages/astroid/nodes/scoped_nodes/scoped_nodes.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_h8SxQKBxDbE9kpBrD8a59514",
+     "content": "exit 0\n    def _infer(self, context: InferenceContext | None = None) -> Generator[Lambda]:\n        yield self\n\n    def _get_yield_nodes_skip_functions(self):\n        \"\"\"A Lambda node can contain a Yield node in the body.\"\"\"\n        yield from self.body._get_yield_nodes_skip_functions()\n\n\nclass FunctionDef(\n    _base_nodes.MultiLineBlockNode,\n    _base_nodes.FilterStmtsBaseNode,\n    _base_nodes.Statement,\n    LocalsDictNodeNG,\n):\n    \"\"\"Class representing an :class:`ast.FunctionDef`.\n\n    >>> import astroid\n    >>> node = astroid.extract_node('''\n    ... def my_func(arg):\n    ...     return arg + 1\n    ... ''')\n    >>> node\n    <FunctionDef.my_func l.2 at 0x7f23b2e71e10>\n    \"\"\"\n\n    _astroid_fields = (\n        \"decorators\",\n        \"args\",\n        \"returns\",\n        \"type_params\",\n        \"doc_node\",\n        \"body\",\n    )\n    _multi_line_block_fields = (\"body\",)\n    returns = None\n\n    decorators: node_classes.Decorators | None\n    \"\"\"The decorators that are applied to this method or function.\"\"\"\n\n    doc_node: Const | None\n    \"\"\"The doc node associated with this node.\"\"\"\n\n    args: Arguments\n    \"\"\"The arguments that the function takes.\"\"\"\n\n    is_function = True\n    \"\"\"Whether this node indicates a function.\n\n    For a :class:`FunctionDef` this is always ``True``.\n\n    :type: bool\n    \"\"\"\n    type_annotation = None\n    \"\"\"If present, this will contain the type annotation passed by a type comment\n\n    :type: NodeNG or None\n    \"\"\"\n    type_comment_args = None\n    \"\"\"\n    If present, this will contain the type annotation for arguments\n    passed by a type comment\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_nRCbNYb8NnpOwoGCPNjx9728",
+     "name": "write_file",
+     "arguments": {
+      "content": "class C:\n    lam = lambda self: 1\n\n    def check(self):\n        return self.lam == 1  # [comparison-with-callable]\n\n    def check2(self):\n        return self.lam == 2  # [comparison-with-callable]\n\nc = C()\nprint(c.lam == 3)  # [comparison-with-callable]\n",
+      "path": "/tmp/crash_repro.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_nRCbNYb8NnpOwoGCPNjx9728",
+     "content": "wrote 254 bytes to /tmp/crash_repro.py",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_ET_5e6T1povjDEdiuzil6ul6450",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /tmp && PYTHONPATH=/testbed python -m pylint --disable=all --enable=comparison-with-callable /tmp/crash_repro.py 2>&1 | head -12; rm -f /tmp/crash_repro.py"
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_ET_5e6T1povjDEdiuzil6ul6450",
+     "content": "exit 0\n************* Module crash_repro\ncrash_repro.py:5:15: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\ncrash_repro.py:8:15: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\ncrash_repro.py:11:6: W0143: Comparing against a callable, did you omit the parenthesis? (comparison-with-callable)\n\n-----------------------------------\nYour code has been rated at 6.25/10\n\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "tool_call",
+     "id": "call_00_stDHeaSfX3ytSH0DEQgZ7704",
+     "name": "bash",
+     "arguments": {
+      "command": "cd /testbed && timeout 1200 python -m pytest tests/test_functional.py -q 2>&1 | tail -3; git status --short",
+      "timeout": 1300
+     }
+    }
+   ]
+  },
+  {
+   "role": "user",
+   "content": [
+    {
+     "kind": "tool_result",
+     "call_id": "call_00_stDHeaSfX3ytSH0DEQgZ7704",
+     "content": "exit 0\n............................................................s......s.... [ 95%]\n......................................                                   [100%]\n885 passed, 17 skipped in 19.81s\n M pylint/checkers/base/comparison_checker.py\n",
+     "is_error": false
+    }
+   ]
+  },
+  {
+   "role": "assistant",
+   "content": [
+    {
+     "kind": "text",
+     "text": "## Summary\n\nThe crash happened in `_check_callable_comparison` (`pylint/checkers/base/comparison_checker.py`).\n\n### Root cause\nWhen a lambda is assigned as a class attribute and accessed through an instance (`self.lam`), astroid infers it as a `BoundMethod` whose `_proxied` is a `nodes.Lambda`. That `BoundMethod` passed the original `isinstance(inferred, bare_callables)` check, but the subsequent code unconditionally called:\n\n- `inferred.decoratornames()` \u2014 `Lambda` has no `decoratornames` (unlike `FunctionDef`), so the proxy raised `AttributeError`.\n- `for x in inferred.body` \u2014 a `Lambda`'s `body` is a single expression node, not a list of statements, so this would raise `TypeError`.\n\n### Fix\nIn `_check_callable_comparison`:\n\n1. Early-`continue` when `safe_infer` doesn't return a bare callable (preserving the original logic shape).\n2. When the inferred node is a `BoundMethod`, unwrap the proxy chain (`BoundMethod`/`UnboundMethod`) to find the underlying node.\n3. If the underlying node is a `Lambda`, count it as a bare callable (a bound method / callable accessed without calling) and skip the `FunctionDef`-only attribute checks (`decoratornames()`, statement-list `.body`) that caused the crash.\n\n### Behavior notes\n- The original crash case now correctly emits `comparison-with-callable` for `self.lam == 1` / `Instance().lam == 1`.\n- Bare lambdas (e.g. `f = lambda: 1; f == 1`) remain **not** flagged, matching the repository's established behavior codified by existing functional tests (`consider_refactoring_into_while_condition` uses bare lambda comparisons and expects no such message).\n- Existing handling for callables that raise and `typing._SpecialForm` constants is unchanged.\n- All 885 functional tests pass."
+    }
+   ]
+  }
+ ]
+}

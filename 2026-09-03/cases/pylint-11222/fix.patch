@@ -1,0 +1,29 @@
+diff --git a/doc/whatsnew/fragments/11222.bugfix b/doc/whatsnew/fragments/11222.bugfix
+new file mode 100644
+index 0000000000..24fe2d29d3
+--- /dev/null
++++ b/doc/whatsnew/fragments/11222.bugfix
+@@ -0,0 +1,4 @@
++Fix a crash when a call unpacks a dictionary whose keys are not string
++constants, e.g. ``copy.copy(**{-1: 1})``.
++
++Closes #11222
+diff --git a/pylint/checkers/utils.py b/pylint/checkers/utils.py
+index d1815a1e5d..543dd7bef1 100644
+--- a/pylint/checkers/utils.py
++++ b/pylint/checkers/utils.py
+@@ -756,9 +756,11 @@ def infer_kwarg_from_call(call_node: nodes.Call, keyword: str) -> nodes.Name | N
+     for arg in call_node.kwargs:
+         inferred = safe_infer(arg.value)
+         if isinstance(inferred, nodes.Dict):
+-            for item in inferred.items:
+-                if item[0].value == keyword:
+-                    return item[1]
++            for key, value in inferred.items:
++                # Keys can be any expression (or None for '**' unpacking),
++                # only string constants can name a keyword argument.
++                if isinstance(key, nodes.Const) and key.value == keyword:
++                    return value
+ 
+     return None
+ 

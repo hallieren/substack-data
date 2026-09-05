@@ -1,0 +1,128 @@
+# flask-6093 — https://github.com/pallets/flask/issues/6093
+
+## reference
+
+F2P: ['tests/test_basic.py::test_run_from_config[None-None-[::1]:8080-::1-8080]', 'tests/test_testing.py::test_session_transaction_ipv6']
+
+pico's F2P results: {'tests/test_basic.py::test_run_from_config[None-None-[::1]:8080-::1-8080]': 'PASSED', 'tests/test_testing.py::test_session_transaction_ipv6': 'PASSED'}
+
+## pico's final report
+
+Implemented the IPv6 parsing fixes.
+
+Changes made:
+
+- `src/flask/app.py`: `Flask.run()` no longer splits `SERVER_NAME` at the first `":"`. It now:
+  - Handles bracketed IPv6 values like `[::1]:8080` and `[::1]`, stripping the brackets for the host.
+  - Only treats a single-colon value as `host:port`.
+  - Treats unbracketed IPv6 addresses (e.g. `::1`) as a host with no explicit port.
+
+- `src/flask/testing.py`: `FlaskClient.session_transaction()` now derives the cookie server name from `urlsplit(ctx.request.url).hostname` instead of `ctx.request.host.partition(":")[0]`. This matches how Werkzeug itself determines the hostname and correctly handles IPv6 hosts like `[::1]:8000`, storing cookies under `::1` instead of `[`.
+
+Verification:
+- Reproduced the two scenarios from the PR description; both now pass:
+  - Session set via `client.session_transaction(base_url="http://[::1]:8000/")` is visible on the subsequent request.
+  - `app.run()` with `SERVER_NAME = "[::1]:8080"` calls `run_simple("::1", 8080, ...)`.
+- Ran `tests/test_basic.py` and `tests/test_testing.py`: 157 passed.
+- Ran the full suite excluding the pre-existing unrelated async dependency failure: 479 passed, 4 skipped.
+
+## pico's patch
+
+```diff
+diff --git a/src/flask/app.py b/src/flask/app.py
+index 7585dda6..43e0c045 100644
+--- a/src/flask/app.py
++++ b/src/flask/app.py
+@@ -721,7 +721,14 @@ class Flask(App):
+         sn_host = sn_port = None
+ 
+         if server_name:
+-            sn_host, _, sn_port = server_name.partition(":")
++            if server_name.startswith("["):
++                sn_host, _, sn_port = server_name[1:].partition("]:")
++                if not sn_port:
++                    sn_host = server_name[1:-1]
++            elif server_name.count(":") == 1:
++                sn_host, _, sn_port = server_name.partition(":")
++            else:
++                sn_host = server_name
+ 
+         if not host:
+             if sn_host:
+diff --git a/src/flask/testing.py b/src/flask/testing.py
+index 68b1ab48..9ed195fd 100644
+--- a/src/flask/testing.py
++++ b/src/flask/testing.py
+@@ -177,7 +177,7 @@ class FlaskClient(Client):
+             app.session_interface.save_session(app, sess, resp)
+ 
+         self._update_cookies_from_response(
+-            ctx.request.host.partition(":")[0],
++            urlsplit(ctx.request.url).hostname or ctx.request.host,
+             ctx.request.path,
+             resp.headers.getlist("Set-Cookie"),
+         )
+
+```
+
+## human fix (merged PR #6096)
+
+```diff
+diff --git a/src/flask/app.py b/src/flask/app.py
+index 7585dda614..6203586958 100644
+--- a/src/flask/app.py
++++ b/src/flask/app.py
+@@ -12,6 +12,7 @@
+ from itertools import chain
+ from types import TracebackType
+ from urllib.parse import quote as _url_quote
++from urllib.parse import urlsplit
+ 
+ import click
+ from werkzeug.datastructures import Headers
+@@ -721,7 +722,9 @@ def run(
+         sn_host = sn_port = None
+ 
+         if server_name:
+-            sn_host, _, sn_port = server_name.partition(":")
++            server_url = urlsplit(f"//{server_name}")
++            sn_host = server_url.hostname
++            sn_port = server_url.port
+ 
+         if not host:
+             if sn_host:
+@@ -731,8 +734,8 @@ def run(
+ 
+         if port or port == 0:
+             port = int(port)
+-        elif sn_port:
+-            port = int(sn_port)
++        elif sn_port is not None:
++            port = sn_port
+         else:
+             port = 5000
+ 
+@@ -745,7 +748,7 @@ def run(
+         from werkzeug.serving import run_simple
+ 
+         try:
+-            run_simple(t.cast(str, host), port, self, **options)
++            run_simple(host, port, self, **options)
+         finally:
+             # reset the first request information if the development server
+             # reset normally.  This makes it possible to restart the server
+diff --git a/src/flask/testing.py b/src/flask/testing.py
+index 68b1ab48c6..8d058ca00d 100644
+--- a/src/flask/testing.py
++++ b/src/flask/testing.py
+@@ -177,7 +177,7 @@ def session_transaction(
+             app.session_interface.save_session(app, sess, resp)
+ 
+         self._update_cookies_from_response(
+-            ctx.request.host.partition(":")[0],
++            urlsplit(ctx.request.host_url).hostname or "localhost",
+             ctx.request.path,
+             resp.headers.getlist("Set-Cookie"),
+         )
+
+```

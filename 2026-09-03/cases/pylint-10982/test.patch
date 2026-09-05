@@ -1,0 +1,235 @@
+diff --git a/doc/test_messages_documentation.py b/doc/test_messages_documentation.py
+index 3af16977009..5d07cc834da 100644
+--- a/doc/test_messages_documentation.py
++++ b/doc/test_messages_documentation.py
+@@ -6,6 +6,7 @@
+ 
+ from __future__ import annotations
+ 
++import sys
+ from collections import Counter
+ from pathlib import Path
+ from typing import TextIO
+@@ -74,6 +75,22 @@ def _add_code_example_to_suite(
+ TESTS_NAMES = [f"{t[0]}-{t[1].stem}" for t in TESTS]
+ 
+ 
++def _min_pyver(example: Path) -> tuple[int, ...] | None:
++    """The Python version an example needs to be parsed, if it declares one.
++
++    An example written in syntax that older interpreters cannot parse declares
++    the version it needs in a ``min_pyver`` file next to it, e.g. ``3.15``.
++    A message that merely does not apply to every ``py-version`` does not
++    belong here: such an example pins ``py-version`` in its own ``pylintrc``.
++    """
++    min_pyver_file = example.parent / "min_pyver"
++    if not min_pyver_file.exists():
++        return None
++    return tuple(
++        int(part) for part in min_pyver_file.read_text(encoding="utf-8").split(".")
++    )
++
++
+ class LintModuleTest:
+     def __init__(
+         self, test_file: tuple[str, Path], multiple_file_messages: list[str]
+@@ -217,6 +234,12 @@ def assert_message_bad(self, bad_files: list[Path], messages: list[Message]) ->
+ @pytest.mark.parametrize("test_file", TESTS, ids=TESTS_NAMES)
+ @pytest.mark.filterwarnings("ignore::DeprecationWarning")
+ def test_code_examples(test_file: tuple[str, Path]) -> None:
++    min_pyver = _min_pyver(test_file[1])
++    if min_pyver and sys.version_info[: len(min_pyver)] < min_pyver:
++        pytest.skip(
++            f"'{test_file[1]}' needs Python "
++            f"{'.'.join(str(part) for part in min_pyver)} to be parsed"
++        )
+     known_multiple_file_messages = ["cyclic-import", "duplicate-code"]
+     lint_test = LintModuleTest(test_file, known_multiple_file_messages)
+     lint_test.runTest()
+diff --git a/tests/functional/c/consider/consider_using_dict_comprehension_py315.py b/tests/functional/c/consider/consider_using_dict_comprehension_py315.py
+new file mode 100644
+index 00000000000..a1c2bdb5785
+--- /dev/null
++++ b/tests/functional/c/consider/consider_using_dict_comprehension_py315.py
+@@ -0,0 +1,8 @@
++"""Tests for consider-using-dict-comprehension with PEP 798 starred elements.
++
++``dict([*kv for kv in PAIRS])`` flattens the pair lists, so it is not
++equivalent to a key/value dict comprehension and must not be reported.
++"""
++PAIRS = [[("a", 1)], [("b", 2)]]
++MERGED = dict([*kv for kv in PAIRS])
++REPORTED = dict([(k, k * 2) for k in [1, 2]])  # [consider-using-dict-comprehension]
+diff --git a/tests/functional/c/consider/consider_using_dict_comprehension_py315.rc b/tests/functional/c/consider/consider_using_dict_comprehension_py315.rc
+new file mode 100644
+index 00000000000..dabce07cac5
+--- /dev/null
++++ b/tests/functional/c/consider/consider_using_dict_comprehension_py315.rc
+@@ -0,0 +1,2 @@
++[testoptions]
++min_pyver=3.15
+diff --git a/tests/functional/c/consider/consider_using_dict_comprehension_py315.txt b/tests/functional/c/consider/consider_using_dict_comprehension_py315.txt
+new file mode 100644
+index 00000000000..b5f1bddfef3
+--- /dev/null
++++ b/tests/functional/c/consider/consider_using_dict_comprehension_py315.txt
+@@ -0,0 +1 @@
++consider-using-dict-comprehension:8:11:8:45::Consider using a dictionary comprehension:UNDEFINED
+diff --git a/tests/functional/i/iterable_context_py315.py b/tests/functional/i/iterable_context_py315.py
+new file mode 100644
+index 00000000000..96c6edfa44f
+--- /dev/null
++++ b/tests/functional/i/iterable_context_py315.py
+@@ -0,0 +1,28 @@
++"""PEP 798 unpacking checks that the unpacked element is iterable."""
++# pylint: disable=missing-function-docstring
++NESTED = [[1, 2], [3, 4]]
++NUMBERS = [1, 2, 3]
++
++FLAT_LIST = [*sub for sub in NESTED]
++FLAT_SET = {*sub for sub in NESTED}
++FLAT_GEN = list(*sub for sub in NESTED)
++
++BAD_LIST = [*number for number in NUMBERS]  # [not-an-iterable]
++BAD_SET = {*number for number in NUMBERS}  # [not-an-iterable]
++BAD_GEN = list(*number for number in NUMBERS)  # [not-an-iterable]
++
++
++async def lists():
++    yield [1, 2]
++
++
++async def numbers():
++    yield 1
++
++
++async def unpack_async():
++    flat = [*sub async for sub in lists()]
++    # The value yielded by an 'async for' cannot be inferred, so the
++    # non-iterable element goes unreported instead of being a false positive.
++    unreported = [*number async for number in numbers()]
++    return flat, unreported
+diff --git a/tests/functional/i/iterable_context_py315.rc b/tests/functional/i/iterable_context_py315.rc
+new file mode 100644
+index 00000000000..dabce07cac5
+--- /dev/null
++++ b/tests/functional/i/iterable_context_py315.rc
+@@ -0,0 +1,2 @@
++[testoptions]
++min_pyver=3.15
+diff --git a/tests/functional/i/iterable_context_py315.txt b/tests/functional/i/iterable_context_py315.txt
+new file mode 100644
+index 00000000000..fe47c40f1a4
+--- /dev/null
++++ b/tests/functional/i/iterable_context_py315.txt
+@@ -0,0 +1,3 @@
++not-an-iterable:10:13:10:19::Non-iterable value number is used in an iterating context:UNDEFINED
++not-an-iterable:11:12:11:18::Non-iterable value number is used in an iterating context:UNDEFINED
++not-an-iterable:12:16:12:22::Non-iterable value number is used in an iterating context:UNDEFINED
+diff --git a/tests/functional/m/mapping_context_py315.py b/tests/functional/m/mapping_context_py315.py
+new file mode 100644
+index 00000000000..6174ef997fc
+--- /dev/null
++++ b/tests/functional/m/mapping_context_py315.py
+@@ -0,0 +1,7 @@
++"""PEP 798 unpacking checks that the unpacked element is a mapping."""
++MAPPINGS = [{"a": 1}, {"b": 2}]
++NUMBERS = [1, 2, 3]
++
++MERGED = {**mapping for mapping in MAPPINGS}
++
++BAD_MERGED = {**number for number in NUMBERS}  # [not-a-mapping]
+diff --git a/tests/functional/m/mapping_context_py315.rc b/tests/functional/m/mapping_context_py315.rc
+new file mode 100644
+index 00000000000..dabce07cac5
+--- /dev/null
++++ b/tests/functional/m/mapping_context_py315.rc
+@@ -0,0 +1,2 @@
++[testoptions]
++min_pyver=3.15
+diff --git a/tests/functional/m/mapping_context_py315.txt b/tests/functional/m/mapping_context_py315.txt
+new file mode 100644
+index 00000000000..936b684f0d0
+--- /dev/null
++++ b/tests/functional/m/mapping_context_py315.txt
+@@ -0,0 +1 @@
++not-a-mapping:7:16:7:22::Non-mapping value number is used in a mapping context:UNDEFINED
+diff --git a/tests/functional/s/star/star_needs_assignment_target_py315.py b/tests/functional/s/star/star_needs_assignment_target_py315.py
+new file mode 100644
+index 00000000000..96c385d10b2
+--- /dev/null
++++ b/tests/functional/s/star/star_needs_assignment_target_py315.py
+@@ -0,0 +1,15 @@
++"""PEP 798 unpacking in comprehensions (Python 3.15) is valid and must not
++trigger star-needs-assignment-target."""
++
++# pylint: disable=missing-function-docstring
++
++
++def transform(lists, dicts):
++    starred_list = [*sub for sub in lists]
++    starred_set = {*sub for sub in lists}
++    double_starred_dict = {**d for d in dicts}
++    starred_gen = list(*sub for sub in lists)
++    return starred_list, starred_set, double_starred_dict, starred_gen
++
++
++STILL_BAD = *[1, 2]  # [star-needs-assignment-target]
+diff --git a/tests/functional/s/star/star_needs_assignment_target_py315.rc b/tests/functional/s/star/star_needs_assignment_target_py315.rc
+new file mode 100644
+index 00000000000..dabce07cac5
+--- /dev/null
++++ b/tests/functional/s/star/star_needs_assignment_target_py315.rc
+@@ -0,0 +1,2 @@
++[testoptions]
++min_pyver=3.15
+diff --git a/tests/functional/s/star/star_needs_assignment_target_py315.txt b/tests/functional/s/star/star_needs_assignment_target_py315.txt
+new file mode 100644
+index 00000000000..83f1fd7dfa2
+--- /dev/null
++++ b/tests/functional/s/star/star_needs_assignment_target_py315.txt
+@@ -0,0 +1 @@
++star-needs-assignment-target:15:12:15:19::Can use starred expression only in assignment target:UNDEFINED
+diff --git a/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.py b/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.py
+new file mode 100644
+index 00000000000..0971f935c7c
+--- /dev/null
++++ b/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.py
+@@ -0,0 +1,16 @@
++"""Test that PEP 798 unpacking is reported when py-version is lower than 3.15."""
++baskets = [["apple", "banana"], ["cherry"]]
++stocks = [{"apple": 2}, {"cherry": 5}]
++
++# +1: [using-comprehension-unpacking-in-unsupported-version]
++fruits = [*basket for basket in baskets]
++# +1: [using-comprehension-unpacking-in-unsupported-version]
++unique = {*basket for basket in baskets}
++# +1: [using-comprehension-unpacking-in-unsupported-version]
++generated = (*basket for basket in baskets)
++# +1: [using-comprehension-unpacking-in-unsupported-version]
++merged = {**stock for stock in stocks}
++
++# A comprehension that does not unpack its element is fine on every version.
++flattened = [fruit for basket in baskets for fruit in basket]
++counts = {fruit: 1 for fruit in flattened}
+diff --git a/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.rc b/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.rc
+new file mode 100644
+index 00000000000..8bee8210095
+--- /dev/null
++++ b/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.rc
+@@ -0,0 +1,5 @@
++[main]
++py-version=3.14
++
++[testoptions]
++min_pyver=3.15
+diff --git a/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.txt b/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.txt
+new file mode 100644
+index 00000000000..86cd25ffc9f
+--- /dev/null
++++ b/tests/functional/u/unsupported/unsupported_version_for_comprehension_unpacking.txt
+@@ -0,0 +1,4 @@
++using-comprehension-unpacking-in-unsupported-version:6:9:6:40::Unpacking in comprehensions is not supported by all versions included in the py-version setting:HIGH
++using-comprehension-unpacking-in-unsupported-version:8:9:8:40::Unpacking in comprehensions is not supported by all versions included in the py-version setting:HIGH
++using-comprehension-unpacking-in-unsupported-version:10:12:10:43::Unpacking in comprehensions is not supported by all versions included in the py-version setting:HIGH
++using-comprehension-unpacking-in-unsupported-version:12:9:12:38::Unpacking in comprehensions is not supported by all versions included in the py-version setting:HIGH

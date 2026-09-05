@@ -1,0 +1,8 @@
+{
+ "accept_pre": 1,
+ "accept_post": 0,
+ "baseline_failing": [],
+ "post_failing": [],
+ "patch": "diff --git a/django/utils/translation/trans_real.py b/django/utils/translation/trans_real.py\nindex 7dcc77b46c..cb039e388e 100644\n--- a/django/utils/translation/trans_real.py\n+++ b/django/utils/translation/trans_real.py\n@@ -43,7 +43,7 @@ language_code_re = _lazy_re_compile(\n     re.IGNORECASE\n )\n \n-language_code_prefix_re = _lazy_re_compile(r'^/(\\w+([@-]\\w+)?)(/|$)')\n+language_code_prefix_re = _lazy_re_compile(r'^/(\\w+([@-]\\w+)*)(/|$)')\n \n \n @receiver(setting_changed)\n@@ -509,6 +509,12 @@ def get_language_from_path(path, strict=False):\n     if not regex_match:\n         return None\n     lang_code = regex_match[1]\n+    # Language codes with more than two subtags (e.g. \"en-latn-us\") are only\n+    # accepted when they are explicitly listed in LANGUAGES to avoid consuming\n+    # the rest of the URL as part of the language prefix (e.g.\n+    # \"de-simple-page\"), see #27063.\n+    if lang_code.count('-') > 1 and lang_code not in get_languages():\n+        return None\n     try:\n         return get_supported_language_variant(lang_code, strict=strict)\n     except LookupError:\n",
+ "status": "done"
+}

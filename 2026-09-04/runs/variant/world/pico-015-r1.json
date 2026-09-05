@@ -1,0 +1,8 @@
+{
+ "accept_pre": 1,
+ "accept_post": 0,
+ "baseline_failing": [],
+ "post_failing": [],
+ "patch": "diff --git a/lib/matplotlib/axis.py b/lib/matplotlib/axis.py\nindex e1cb06f934..5d4a21ba36 100644\n--- a/lib/matplotlib/axis.py\n+++ b/lib/matplotlib/axis.py\n@@ -1657,8 +1657,25 @@ class Axis(martist.Artist):\n         if converter is None:\n             return False\n \n+        adopted = False\n+        if self.units is None:\n+            # If this axis is shared with an axis that already has units for the\n+            # same converter, reuse those units rather than creating new ones,\n+            # which would trigger unit-change callbacks on all shared axes (and\n+            # in turn clobber their data limits).\n+            for shared_axis in self._get_shared_axis():\n+                if (shared_axis is not self\n+                        and shared_axis.units is not None\n+                        and isinstance(shared_axis.converter,\n+                                       type(converter))):\n+                    self.units = shared_axis.units\n+                    self.converter = shared_axis.converter\n+                    adopted = True\n+                    break\n+\n         neednew = self.converter != converter\n-        self.converter = converter\n+        if not adopted:\n+            self.converter = converter\n         default = self.converter.default_units(data, self)\n         if default is not None and self.units is None:\n             self.set_units(default)\n",
+ "status": "stopped after max_spend_tokens without a final answer"
+}
