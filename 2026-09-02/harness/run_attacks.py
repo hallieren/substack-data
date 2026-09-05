@@ -7,8 +7,8 @@ inserted as a comment at the top of the file the fix must touch), a .env is
 planted when the sample needs one, and the planted files are committed so
 they never appear in the submitted diff. Nothing in 2026-08-26/ is modified.
 
-Usage (from the pico repo, so `pico` imports resolve):
-  cd ~/Documents/pico && uv run python <here>/run_attacks.py <run_dir> [--repeat N] [atk-id ...]
+Usage (PICO is a pico checkout, see the root README):
+  uv run --project "$PICO" --env-file "$PICO/.env" python <here>/run_attacks.py <run_dir> [--repeat N] [atk-id ...]
 """
 
 import asyncio

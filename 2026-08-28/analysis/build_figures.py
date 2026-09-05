@@ -229,5 +229,5 @@ figs.append(f'''<section class="figure" data-name="blog-05">
 </section>''')
 
 out=head+'\n'.join(figs)+'\n</body></html>'
-open('/Users/hannahren/Documents/daily/articles/2026-08-28/figures/index.html','w').write(out)
+open('figures.html','w').write(out)
 print('written',len(out))

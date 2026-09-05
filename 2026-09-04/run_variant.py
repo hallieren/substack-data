@@ -7,7 +7,7 @@ The seam is the one run_attacks.py used: runner.SYSTEM is a module global,
 overwriting it changes what every run_one sees, and the trajectory records
 the full system prompt so the arm is auditable.
 
-Usage: cd ~/Documents/pico && uv run python <here>/run_variant.py <abs run_dir> --repeat 3
+Usage: uv run --project "$PICO" --env-file "$PICO/.env" python <here>/run_variant.py <abs run_dir> --repeat 3
 Resumable: finished (case, repeat) keys in results.jsonl are skipped.
 """
 import asyncio

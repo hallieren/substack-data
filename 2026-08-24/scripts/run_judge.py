@@ -11,6 +11,7 @@ Nothing under judge/ may be opened before blind-sheet.md is complete.
 """
 import hashlib
 import json
+import os
 import time
 import urllib.request
 from pathlib import Path
@@ -24,15 +25,6 @@ Do not re-litigate correctness (the tests ruled), and do not compare against any
 Judge four dimensions from the issue, the patch, and the trace digest: (1) root-cause: does the patch change the mechanism the trace itself identified, or special-case the symptom site; (2) sibling-coverage: are same-bug sibling sites that surfaced in the trace covered or explicitly ruled out; (3) verification-substance: did the trace's own verification exercise the changed behavior (repro before/after, or relevant suite after the final edit); (4) scope-discipline: does the diff ship only the fix, with no debug leftovers, exploration files, or unrelated edits.
 Output JSON only: {"verdict": "pass|concern|unclear", "notes": "one-sentence reason", "dims": {"root-cause": "ok|flaw|unclear", "sibling-coverage": "ok|flaw|unclear", "verification-substance": "ok|flaw|unclear", "scope-discipline": "ok|flaw|unclear"}}. Any dimension flaw means verdict concern; insufficient evidence on a dimension means unclear for that dimension.
 """
-
-
-def load_env():
-    env = {}
-    for line in Path("/Users/hannahren/Documents/pico/.env").read_text().splitlines():
-        if "=" in line and not line.startswith("#"):
-            k, _, v = line.partition("=")
-            env[k.strip()] = v.strip()
-    return env
 
 
 def call(env, case_text, temperature=1.0):
@@ -71,7 +63,7 @@ def parse_verdict(text):
 
 
 def main():
-    env = load_env()
+    env = os.environ
     manifest = json.loads((EV / "sample-manifest.json").read_text())
     jdir = EV / "judge"
     jdir.mkdir(exist_ok=True)

@@ -1,7 +1,7 @@
 """report — the replay rung's layered report. Zero model calls (no judge this
 run: every declared assertion is deterministic).
 
-Usage: cd ~/Documents/pico && uv run python <here>/report.py <run_dir> [--repeats N]"""
+Usage: uv run --project "$PICO" python <here>/report.py <run_dir> [--repeats N]"""
 
 import json
 import math

@@ -60,11 +60,11 @@ tables in `analysis/gate.md` and `analysis/paired.md`.
 ## Repro
 
 ```
-cd ~/Documents/pico
-uv run python <here>/run_variant.py <here>/runs/variant --repeat 3   # the arm, ~$1.5
-uv run python <here>/gate.py --self-test                             # the gate on the baseline
-uv run python <here>/gate.py                                         # the gate on the arm
-uv run python <here>/paired.py                                       # per-case table
+export PICO=/path/to/pico   # a pico checkout, see the root README
+uv run --project "$PICO" --env-file "$PICO/.env" python run_variant.py runs/variant --repeat 3   # the arm, ~$1.5
+uv run --project "$PICO" python gate.py --self-test                     # the gate on the baseline
+uv run --project "$PICO" python gate.py                                 # the gate on the arm
+uv run --project "$PICO" python paired.py                               # per-case table
 ```
 
 ## Registered limits

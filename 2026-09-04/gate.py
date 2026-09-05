@@ -5,7 +5,7 @@ re-evaluates the 08-26 baseline with zero new model calls, prints the
 five-column table with a light per row, writes analysis/gate.md and
 analysis/gate.json, and exits non-zero on any red light.
 
-Usage: cd ~/Documents/pico && uv run python <here>/gate.py [--self-test]
+Usage: uv run --project "$PICO" python <here>/gate.py [--self-test]
 --self-test runs the gate on the baseline itself (arm = baseline); the sev-1
 row is expected red there (2 hits in 70), which checks the script, not pico.
 """

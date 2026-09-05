@@ -6,7 +6,7 @@ Writes analysis/after.md. The two halves have different verdict sources
 (accept.py from issue text vs the human fix's tests); the table keeps them
 in separate rows before the merged line.
 
-Usage: cd ~/Documents/pico && uv run python after.py [runs/harvest] [--repeats 3]
+Usage: uv run --project "$PICO" python after.py [runs/harvest] [--repeats 3]
 """
 import json, math, sys
 from pathlib import Path

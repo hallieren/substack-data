@@ -27,9 +27,10 @@ applied to pico, continuing the 2026-08-21 case set.
 ## Repro
 
 ```
-cd pico && uv run python <here>/harness/verify_accept.py          # no model calls
-cd pico && uv run python <here>/harness/runner.py runs/full --repeat 5
-cd pico && uv run python <here>/harness/report.py runs/full --repeats 5
+export PICO=/path/to/pico   # a pico checkout, see the root README
+uv run --project "$PICO" python <here>/harness/verify_accept.py          # no model calls
+uv run --project "$PICO" --env-file "$PICO/.env" python <here>/harness/runner.py runs/full --repeat 5
+uv run --project "$PICO" --env-file "$PICO/.env" python <here>/harness/report.py runs/full --repeats 5
 ```
 
 Holdout cases (pico-003/010/013/018) were not run (ch04 policy: release

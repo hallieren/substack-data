@@ -4,7 +4,7 @@ import json, os, sys, random
 from collections import Counter
 
 S = os.path.dirname(os.path.abspath(__file__))
-R = '/Users/hannahren/Documents/substack-data/2026-08-16/runs/20260815-sealed'
+R = os.path.join(S, '..', '2026-08-16', 'runs', '20260815-sealed')  # trajs/, logs/: the sealed tarball in ../2026-08-16/trajs, extracted into R
 
 def trunc(s, head, tail=0):
     s = s or ''
@@ -15,7 +15,7 @@ def trunc(s, head, tail=0):
     return s[:head] + f'...[{len(s)-head} chars omitted]'
 
 def render(iid, res_row, resolved, gold):
-    d = json.load(open(f'{S}/sealed/trajs/{iid}.traj.json'))
+    d = json.load(open(f'{R}/trajs/{iid}.traj.json'))
     out = []
     n = 0
     problem = None
@@ -42,7 +42,7 @@ def render(iid, res_row, resolved, gold):
             else:
                 out.append(f"step {n:3d}  {k or role}  {trunc(json.dumps(p, ensure_ascii=False), 500)}")
 
-    logdir = f'{S}/sealed/logs/{iid}'
+    logdir = f'{R}/logs/{iid}'
     rep = {}
     if os.path.exists(f'{logdir}/report.json'):
         rep = json.load(open(f'{logdir}/report.json')).get(iid, {})

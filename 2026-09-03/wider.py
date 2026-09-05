@@ -5,13 +5,14 @@ the PR's test files (baseline), apply pico's patch, run it again, and list
 newly failing tests. Zero model calls, CPU only.
 
 Writes analysis/wider.json + analysis/wider.md.
-Usage: cd ~/Documents/pico && uv run python wider.py [runs/replay]
+Usage: uv run --project "$PICO" python wider.py [runs/replay]
 """
-import asyncio, json, sys, time
+import asyncio, json, os, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path[:0] = [str(HERE / "harness"), str(Path.home() / "Documents/pico/bench")]
+PICO = Path(os.environ["PICO"])  # a pico checkout, see the root README
+sys.path[:0] = [str(HERE / "harness"), str(PICO / "bench")]
 from reference import PYTEST, parse_results, failing  # noqa: E402
 from swebench_mini import _docker  # noqa: E402
 

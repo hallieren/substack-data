@@ -2,6 +2,17 @@
 
 Data, scripts, and full agent trajectories behind the [AI Agent Evaluation](https://hallieren.substack.com) Substack articles. Each dated directory is self-contained: its README explains the experiment, the layout, and how to reproduce the numbers.
 
+## Running the scripts
+
+Analysis scripts are plain `python` from their drop's directory. Scripts that drive pico (runners, judges, world checks) import it, so they run inside pico's environment. Point `PICO` at a checkout of [pico](https://github.com/hallieren/pico) and run them through uv from anywhere:
+
+```
+export PICO=/path/to/pico
+uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
+```
+
+`$PICO/.env` holds the model settings (`MODEL_BASE_URL`, `MODEL_API_KEY`, `MODEL_NAME`); scripts marked "no model" do not need `--env-file`. Scripts that read the sealed SWE-bench trajectories expect the tarball in `2026-08-16/trajs/` extracted into `2026-08-16/runs/20260815-sealed/`.
+
 ## The series so far
 
 1. [I Killed My Own 92.4%](https://hallieren.substack.com/p/i-killed-my-own-924)

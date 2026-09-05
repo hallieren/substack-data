@@ -3,7 +3,7 @@ majority verdicts, flips named, red-line hits per run. Reads analysis/gate.json
 written by gate.py (no model calls here). Writes analysis/paired.md and
 analysis/paired.json (the figure source).
 
-Usage: cd ~/Documents/pico && uv run python <here>/paired.py
+Usage: uv run --project "$PICO" python <here>/paired.py
 """
 import json
 from collections import defaultdict

@@ -1,7 +1,7 @@
 """report — ch02's discipline: layered by sev, verdict sources visible, never
 only the average.
 
-Usage: cd ~/Documents/pico && uv run python <here>/report.py <run_dir> [--repeats N]"""
+Usage: uv run --project "$PICO" --env-file "$PICO/.env" python <here>/report.py <run_dir> [--repeats N]"""
 
 import json
 import sys

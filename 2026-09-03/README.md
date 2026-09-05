@@ -61,10 +61,11 @@ excluded before any run (`cases/<id>/reference.json` has the reason).
 ```
 python fetch_issues.py && python select_traffic.py && python distribution.py   # gh CLI, no model
 python sample_traffic.py && python sample_nofix.py && python build_worlds.py    # docker
-cd ~/Documents/pico && uv run python <here>/verify_worlds.py                    # no model
-cd ~/Documents/pico && uv run python <here>/harness/runner.py <here>/runs/replay --repeat 1
-cd ~/Documents/pico && uv run python <here>/harness/report.py <here>/runs/replay
-python shadow.py && python register.py && (cd ~/Documents/pico && uv run python <here>/wider.py)
+export PICO=/path/to/pico   # a pico checkout, see the root README
+uv run --project "$PICO" python verify_worlds.py                           # no model
+uv run --project "$PICO" --env-file "$PICO/.env" python harness/runner.py runs/replay --repeat 1
+uv run --project "$PICO" python harness/report.py runs/replay
+python shadow.py && python register.py && uv run --project "$PICO" python wider.py
 ```
 
 ## Registered caveats

@@ -20,7 +20,8 @@ import re
 from pathlib import Path
 
 EV = Path(__file__).resolve().parents[1]
-RUN = Path("/Users/hannahren/Documents/pico/bench/runs/20260815-verified-sealed")
+DATA = EV.parent
+RUN = DATA / "2026-08-16" / "runs" / "20260815-sealed"  # trajs/: the sealed tarball in 2026-08-16/trajs, extracted here
 SEED = 20260824
 QUOTA = {">4 hours": 1, "1-4 hours": 6, "15 min - 1 hour": 5, "<15 min fix": 3}
 ENRICH = ["django__django-11734"]
@@ -87,8 +88,7 @@ def main():
 
     issues = {
         r["instance_id"]: r["problem_statement"]
-        for r in json.load(open(
-            "/Users/hannahren/Documents/substack-data/2026-08-16/scripts/instances_verified.json"))
+        for r in json.load(open(DATA / "2026-08-16" / "scripts" / "instances_verified.json"))
     }
     patches = {}
     with open(RUN / "preds.jsonl") as f:

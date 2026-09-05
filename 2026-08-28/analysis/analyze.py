@@ -1,5 +1,5 @@
 import json, glob, statistics, re, os
-BASE='/Users/hannahren/Documents/substack-data/2026-08-16'
+BASE=os.path.join(os.path.dirname(os.path.abspath(__file__)),'..','..','2026-08-16')
 rows=[json.loads(l) for l in open(f'{BASE}/runs/20260815-sealed/results.jsonl')]
 res={r['instance_id']:r for r in rows}
 

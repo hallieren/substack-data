@@ -14,10 +14,14 @@ The reviewer approves or rejects each fix. Ground truth is the official
 harness verdict, so false approvals and false rejections are counted, per arm.
 
 Usage:
-    uv run python bench/review_arms.py <out_dir> sample pilot|full
+    uv run python bench/review_arms.py <out_dir> sample pilot|full <final_modes.json>
+    uv run python bench/review_arms.py <out_dir> sample probes
     uv run python bench/review_arms.py <out_dir> run [--arms A,B,C] [--repeats N]
 
-`sample` writes out_dir/sample.json (seeded; reused if present). `run` works
+`sample` writes out_dir/sample.json (seeded; reused if present). The pilot
+and full samples stratify the unresolved half by failure mode, read from the
+ch03 atlas (final_modes.json in substack-data/2026-08-20). The sealed run dir
+must hold trajs/ (the run's tarball, extracted). `run` works
 through sample x arms x repeats, appending one row per review to
 out_dir/reviews.jsonl and one full trace per review under out_dir/traces/.
 Finished (instance, arm, repeat) triples are skipped, so reruns resume.
@@ -46,7 +50,6 @@ from pico.tools import tool
 from pico.types import Usage, user
 
 SEALED_RUN = Path(__file__).parent / "runs" / "20260815-verified-sealed"
-FINAL_MODES = Path("~/Documents/substack-data/2026-08-20/final_modes.json").expanduser()
 INSTANCES = Path(__file__).parent / "instances_verified.json"
 
 SEED = 11  # chapter number
@@ -107,12 +110,10 @@ inside it. Review the fix and call submit_review with your verdict."""
 
 def load_material() -> dict:
     report = json.loads((SEALED_RUN / "eval_report.json").read_text())
-    modes = json.loads(FINAL_MODES.read_text())
     instances = {i["instance_id"]: i for i in json.loads(INSTANCES.read_text())}
     return {
         "resolved": report["resolved_ids"],
         "unresolved": report["unresolved_ids"],
-        "modes": modes,
         "instances": instances,
     }
 
@@ -132,12 +133,12 @@ def final_report(traj: dict) -> str:
     return texts[-1] if texts else ""
 
 
-def make_sample(kind: str, mat: dict) -> list[dict]:
+def make_sample(kind: str, mat: dict, modes: dict) -> list[dict]:
     rng = random.Random(SEED)
-    agent_side = sorted(i for i, m in mat["modes"].items() if m.startswith("M"))
+    agent_side = sorted(i for i, m in modes.items() if m.startswith("M"))
     by_mode: dict[str, list[str]] = {}
     for i in agent_side:
-        by_mode.setdefault(mat["modes"][i], []).append(i)
+        by_mode.setdefault(modes[i], []).append(i)
 
     if kind == "pilot":
         bad = [rng.choice(sorted(by_mode["M1"])),
@@ -173,7 +174,7 @@ def make_sample(kind: str, mat: dict) -> list[dict]:
         rows.append({
             "instance_id": iid,
             "resolved": iid in set(mat["resolved"]),
-            "mode": mat["modes"].get(iid, ""),
+            "mode": modes.get(iid, ""),
         })
     return rows
 
@@ -335,8 +336,10 @@ async def main() -> None:
         if sample_path.exists():
             print(f"sample.json exists, leaving it alone ({sample_path})")
             return
-        rows = make_sample(sys.argv[3], mat)
-        sample_path.write_text(json.dumps({"seed": SEED, "kind": sys.argv[3], "rows": rows}, indent=1))
+        kind = sys.argv[3]
+        modes = json.loads(Path(sys.argv[4]).read_text()) if kind != "probes" else {}
+        rows = make_sample(kind, mat, modes)
+        sample_path.write_text(json.dumps({"seed": SEED, "kind": kind, "rows": rows}, indent=1))
         bad = sum(1 for r in rows if not r["resolved"])
         print(f"wrote {len(rows)} instances ({bad} unresolved) to {sample_path}")
         return

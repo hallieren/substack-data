@@ -3,8 +3,8 @@
 Every change to the system under test (pico, its bench prompt, the vendor
 model) or to the measuring instrument (cases, verdict logic) since the series
 started, the tier Table 14-1 assigns, the suite the table requires, and what
-actually ran at the time. Sources: `git log` in `~/Documents/pico` (src/,
-bench/) and `~/Documents/substack-data`, plus each drop's README.
+actually ran at the time. Sources: `git log` in the pico repo (src/,
+bench/) and in this repo, plus each drop's README.
 
 | # | date | change | what it touches | tier (Table 14-1) | suite required | what actually ran | gap |
 |---|---|---|---|---|---|---|---|

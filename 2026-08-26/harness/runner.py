@@ -11,12 +11,13 @@ Per (case, repeat):
   baseline the declared suites -> run pico -> git diff -> rerun accept and
   suites -> write trace + world probes.
 
-Usage (from the pico repo, so `pico` imports resolve):
-  cd ~/Documents/pico && uv run python <here>/runner.py <run_dir> [--repeat N] [case_id ...]
+Usage (PICO is a pico checkout, see the root README):
+  uv run --project "$PICO" --env-file "$PICO/.env" python <here>/runner.py <run_dir> [--repeat N] [case_id ...]
 """
 
 import asyncio
 import json
+import os
 import re
 import sys
 import time
@@ -24,7 +25,8 @@ from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent
 DATA = HARNESS.parent
-sys.path[:0] = [str(HARNESS), str(Path.home() / "Documents/pico/bench")]
+PICO = Path(os.environ["PICO"])  # a pico checkout, see the root README
+sys.path[:0] = [str(HARNESS), str(PICO / "bench")]
 
 from swebench_mini import (  # noqa: E402
     MAX_SPEND_TOKENS, MAX_TURNS, SYSTEM, TASK, _docker, container_tools,

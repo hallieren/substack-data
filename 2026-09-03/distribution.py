@@ -11,7 +11,7 @@ from fetch_issues import CODE_BLOCK, TRACEBACK  # noqa: E402
 from select_traffic import is_test, is_docs_or_meta  # noqa: E402
 
 CASES_0821 = HERE.parent / "2026-08-21" / "cases"
-VERIFIED = Path.home() / "Documents/pico/bench/instances_verified.json"
+VERIFIED = HERE.parent / "2026-08-16" / "scripts" / "instances_verified.json"
 ALL = HERE / "traffic" / "all.jsonl"
 SEL = HERE / "traffic" / "selected.jsonl"
 

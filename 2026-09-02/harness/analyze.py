@@ -3,7 +3,7 @@ Runs layers.py's tally on the control, round 1 and round 2, adds cost and
 wall-clock from results.jsonl, and prints the paired before/after table for
 the round-2 samples. Offline, no model calls.
 
-Usage: cd ~/Documents/pico && uv run python <here>/analyze.py
+Usage: uv run --project "$PICO" python <here>/analyze.py
 """
 
 import json

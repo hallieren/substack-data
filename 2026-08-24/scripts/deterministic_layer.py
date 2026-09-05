@@ -16,7 +16,8 @@ import re
 from collections import Counter
 from pathlib import Path
 
-RUN = Path("/Users/hannahren/Documents/pico/bench/runs/20260815-verified-sealed")
+DATA = Path(__file__).resolve().parents[2]
+RUN = DATA / "2026-08-16" / "runs" / "20260815-sealed"  # trajs/: the sealed tarball in 2026-08-16/trajs, extracted here
 OUT = Path(__file__).resolve().parents[1] / "deterministic.json"
 
 TEST_PATH = re.compile(r"(^|/)(tests?|testing)(/|_)|(_tests?\.py$)|(^|/)test_")
@@ -57,7 +58,7 @@ def main():
         json.load(open(RUN / "eval_report.json"))["resolved_ids"]
     )
     diff_map = json.load(
-        open("/Users/hannahren/Documents/substack-data/2026-08-16/analysis/difficulty.json")
+        open(DATA / "2026-08-16" / "analysis" / "difficulty.json")
     )
     rows = {}
     with open(RUN / "preds.jsonl") as f:

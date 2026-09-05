@@ -3,16 +3,18 @@ ran) on its unfixed world, and every declared suite must run and parse.
 Catches broken probes before any agent money is spent. Also proves "reset":
 builds the world twice and compares the /testbed content hash.
 
-Usage: cd ~/Documents/pico && uv run python <here>/verify_accept.py [case_id ...]
+Usage: uv run --project "$PICO" python <here>/verify_accept.py [case_id ...]
 """
 
 import asyncio
 import json
+import os
 import sys
 from pathlib import Path
 
 HARNESS = Path(__file__).resolve().parent
-sys.path[:0] = [str(HARNESS), str(Path.home() / "Documents/pico/bench")]
+PICO = Path(os.environ["PICO"])  # a pico checkout, see the root README
+sys.path[:0] = [str(HARNESS), str(PICO / "bench")]
 
 from swebench_mini import _docker, image, seal_git  # noqa: E402
 

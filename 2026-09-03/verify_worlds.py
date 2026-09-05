@@ -8,13 +8,14 @@ Per case, in a fresh --network none container of pico-world:<id>:
 A world with no FAIL_TO_PASS, or whose patches do not apply, is invalid and
 excluded, never scored. Writes cases/<id>/reference.json.
 
-Usage: python verify_worlds.py [case_id ...]
+Usage: uv run --project "$PICO" python verify_worlds.py [case_id ...]
 """
-import asyncio, json, sys, time
+import asyncio, json, os, sys, time
 from pathlib import Path
 
 HERE = Path(__file__).parent
-sys.path[:0] = [str(HERE / "harness"), str(Path.home() / "Documents/pico/bench")]
+PICO = Path(os.environ["PICO"])  # a pico checkout, see the root README
+sys.path[:0] = [str(HERE / "harness"), str(PICO / "bench")]
 from reference import suite_commands, parse_results, failing, fail_to_pass, pass_to_pass  # noqa
 from swebench_mini import _docker  # noqa
 
