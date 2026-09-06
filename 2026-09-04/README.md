@@ -1,7 +1,6 @@
 # 2026-09-04: the one-line prompt change goes through the gate (ch14)
 
-Companion data for the article "改了一句提示词，要重跑什么" / (English title
-pending). Method: *AI Agent Evaluation* ch14, release gate, change tiers,
+Companion data for the article [What to Rerun After a One-Line Prompt Change](https://hallieren.substack.com/p/what-to-rerun-after-a-one-line-prompt). Method: *AI Agent Evaluation* ch14, release gate, change tiers,
 threshold cold start, applied to pico, the minimal coding agent of this
 series.
 

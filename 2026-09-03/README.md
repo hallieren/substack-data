@@ -1,7 +1,6 @@
 # 2026-09-03: production writes the exam (ch13 online eval, replay + shadow on pico)
 
-Companion data for the article "怎样让生产替你出题" / "How to Let Production
-Write Your Eval Set". Method: *AI Agent Evaluation* ch13, the evidence
+Companion data for the article [How to Let Production Write Your Exam](https://hallieren.substack.com/p/how-to-let-production-write-your). Method: *AI Agent Evaluation* ch13, the evidence
 ladder's first two rungs (replay, shadow) applied to pico, the minimal coding
 agent of this series, with the 2026-08-26 harness pointed at real 2026
 GitHub issues instead of cases we authored.

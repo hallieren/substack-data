@@ -24,13 +24,23 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 7. [How Many Runs Before You Believe an Eval Number?](https://hallieren.substack.com/p/how-many-runs-before-you-believe)
 8. [How to Build an Exam Room Your Agent Can Smash](https://hallieren.substack.com/p/how-to-build-an-exam-room-your-agent)
 9. [What Else Did Your Agent Change?](https://hallieren.substack.com/p/what-else-did-your-agent-change)
-10. [How to Evaluate Your Agent's Memory](https://hallieren.substack.com/p/how-to-evaluate-your-agents-memory)
+10. [How Much Does One Agent Task Really Cost?](https://hallieren.substack.com/p/how-much-does-one-agent-task-really)
+11. [How to Evaluate Your Agent's Memory](https://hallieren.substack.com/p/how-to-evaluate-your-agents-memory)
+12. [How to Evaluate a Subagent](https://hallieren.substack.com/p/how-to-evaluate-a-subagent)
+13. [How Many Layers Does Your Agent Really Have?](https://hallieren.substack.com/p/how-many-layers-does-your-agent-really)
+14. [How to Let Production Write Your Exam](https://hallieren.substack.com/p/how-to-let-production-write-your)
+15. [What to Rerun After a One-Line Prompt Change](https://hallieren.substack.com/p/what-to-rerun-after-a-one-line-prompt)
 
 ## Data drops
 
 | Date | Article | Contents |
 |---|---|---|
+| [2026-09-04](2026-09-04/) | [What to Rerun After a One-Line Prompt Change](https://hallieren.substack.com/p/what-to-rerun-after-a-one-line-prompt) | Release gate for the 09-02 system-prompt line: gate thresholds written before the arm ran, baseline 14 cases x 5 re-evaluated from the judge cache (zero new calls) vs variant 14 x 3, paired analysis with intervals, red-line and attack sets, gate config and verdict |
+| [2026-09-03](2026-09-03/) | [How to Let Production Write Your Exam](https://hallieren.substack.com/p/how-to-let-production-write-your) | Online eval, replay and shadow rungs: 453 closed 2026 issues fetched from six repos, 24 replayed against the maintainers' merged tests (red-to-green verified worlds) plus 5 NOT_PLANNED issues expecting escalation, world builders, traffic samplers, harvested cases for the seed set |
+| [2026-09-02](2026-09-02/) | [How Many Layers Does Your Agent Really Have?](https://hallieren.substack.com/p/how-many-layers-does-your-agent-really) | First red-team round on pico: 8 baits (4 intents x 2 carriers) x 5 runs inside the sealed 08-26 worlds, deterministic red lines, per-run cells (not_seen / breach / seal_stopped / declined), 11/40 breaches listed one by one, anti-injection follow-up round |
+| [2026-09-01](2026-09-01/) | [How to Evaluate a Subagent](https://hallieren.substack.com/p/how-to-evaluate-a-subagent) | Three-arm reviewer admission exam over frozen sealed SWE-bench work: 30 resolved + 30 unresolved x 3 repeats per arm (report only / diff / diff in container with tools), 45 mismatch probes, all review rows, full reviewer traces, analysis script and numbers |
 | [2026-08-31](2026-08-31/) | [How to Evaluate Your Agent's Memory](https://hallieren.substack.com/p/how-to-evaluate-your-agents-memory) | Cross-session memory eval of Alexa for Shopping: 4 fresh conversations, 29-question ask-and-record protocol, verbatim transcript (identifiers redacted), session-boundary screenshots, mechanism map (miswrite / forgetting / crosstalk / missed recall + consistency) |
+| [2026-08-28](2026-08-28/) | [How Much Does One Agent Task Really Cost?](https://hallieren.substack.com/p/how-much-does-one-agent-task-really) | Retrospective cost booking of the sealed 500-task run, no new agent runs: per-trace steps, context tokens and dollars, median / P95 / max, per-repo table, the 130-step dearest trace hand-labeled step by step, figure builder |
 | [2026-08-27](2026-08-27/) | [What Else Did Your Agent Change?](https://hallieren.substack.com/p/what-else-did-your-agent-change) | Retroactive side-effect audit of the 08-26 run: differ script over the 70 stored diffs ($0, zero model calls), gold-patch reference frame, 87 file lines / 19 undeclared / hand triage (16 legal, 1 docs rewrite, 2 stowaway files), 1 overturned verdict, new `no_stowaway_files` assertion |
 | [2026-08-26](2026-08-26/) | [How to Build an Exam Room Your Agent Can Smash](https://hallieren.substack.com/p/how-to-build-an-exam-room-your-agent) | First full run of the eval set: 6-component harness (614 lines), 14 acceptance bundles derived from issue text only, world reset/seal preflight, 14 cases x 5 repeats ($2.27), 70 trajectories, layered report, fidelity gap register |
 | [2026-08-25](2026-08-25/) | [How Many Runs Before You Believe an Eval Number?](https://hallieren.substack.com/p/how-many-runs-before-you-believe) | Judge votes extended from 3 to 5 on the frozen 16-case sample: votes 4 and 5 (identical inputs, same prompt hash), merge script, split-rate results |
