@@ -1,6 +1,6 @@
 # 2026-08-21: pico's seed eval set (ch04 follow-along, coding domain)
 
-Companion data for the article "如何建评估集 / How to Build an Eval Set".
+Companion data for the article "How to Build an Eval Set".
 Method: *AI Agent Evaluation* ch04, migrated per its migration box from the
 support world to a coding agent. Input: the 2026-08-20 failure mode atlas
 (8 agent-side modes over 107 sealed SWE-bench Verified failure trajectories,

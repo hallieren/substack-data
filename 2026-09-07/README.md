@@ -1,7 +1,7 @@
 # 2026-09-07: one improvement cycle on pico (ch15 follow-along)
 
-Companion data for the article "仪表盘红了，先动哪根杠杆" (Which lever fixes
-your agent's worst failure). Method: *AI Agent Evaluation* ch15, failure
+Companion data for the article "Which Lever Fixes Your Agent's Worst
+Failure?". Method: *AI Agent Evaluation* ch15, failure
 mining on stored runs, bottleneck-to-lever mapping read backwards, one lever
 moved (a gate), two-part verification. Continues the 09-04 release gate,
 whose sev-1 red light (test files left in the diff) is this cycle's target.

@@ -1,6 +1,6 @@
 # 2026-08-26: the seed eval set runs for the first time (ch07 follow-along)
 
-Companion data for the article "给 agent 造一个可以砸的世界". Method:
+Companion data for the article "How to Build an Exam Room Your Agent Can Smash". Method:
 *AI Agent Evaluation* ch07 — sandbox, minimal harness, replay layering —
 applied to pico, continuing the 2026-08-21 case set.
 
