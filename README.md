@@ -31,11 +31,13 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 14. [How to Let Production Write Your Exam](https://hallieren.substack.com/p/how-to-let-production-write-your)
 15. [What to Rerun After a One-Line Prompt Change](https://hallieren.substack.com/p/what-to-rerun-after-a-one-line-prompt)
 16. [Which Lever Fixes Your Agent's Worst Failure?](https://hallieren.substack.com/p/which-lever-fixes-your-agents-worst)
+17. [How to Run a Postmortem on Your Agent](https://hallieren.substack.com/p/how-to-run-a-postmortem-on-your-agent)
 
 ## Data drops
 
 | Date | Article | Contents |
 |---|---|---|
+| [2026-09-08](2026-09-08/) | [How to Run a Postmortem on Your Agent](https://hallieren.substack.com/p/how-to-run-a-postmortem-on-your-agent) | Postmortem on the 09-07 gated run that left a test file in its diff: all 116 tool calls of the run classified (zero model calls), first bad step and its secondary, diff list, layered interception tally over the 15 gated runs and the 15-run baseline, seven action items each naming equipment and an owner, the atlas row split, the ownership table and health check |
 | [2026-09-07](2026-09-07/) | [Which Lever Fixes Your Agent's Worst Failure?](https://hallieren.substack.com/p/which-lever-fixes-your-agents-worst) | One improvement cycle on pico: failure mining over 169 stored runs (zero model calls, 33 read, atlas rows added), lever table recomputed for a four-tool agent, a test-tree write gate as the one lever, pre-registered rejection rule, paired 3 cases x 5 runs against the old version, gate log, two-part verification with intervals, cycle template and rollback |
 | [2026-09-04](2026-09-04/) | [What to Rerun After a One-Line Prompt Change](https://hallieren.substack.com/p/what-to-rerun-after-a-one-line-prompt) | Release gate for the 09-02 system-prompt line: gate thresholds written before the arm ran, baseline 14 cases x 5 re-evaluated from the judge cache (zero new calls) vs variant 14 x 3, paired analysis with intervals, red-line and attack sets, gate config and verdict |
 | [2026-09-03](2026-09-03/) | [How to Let Production Write Your Exam](https://hallieren.substack.com/p/how-to-let-production-write-your) | Online eval, replay and shadow rungs: 453 closed 2026 issues fetched from six repos, 24 replayed against the maintainers' merged tests (red-to-green verified worlds) plus 5 NOT_PLANNED issues expecting escalation, world builders, traffic samplers, harvested cases for the seed set |
