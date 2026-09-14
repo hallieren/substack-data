@@ -30,7 +30,8 @@ undisclosed crises, capital arriving one to six months after it is requested,
 - `data/blog04_localization_ablation.csv`: Table 3, the same graph consumed
   four ways (no graph, full graph pasted in, full graph turned into a hint,
   localized two-hop subgraph turned into a hint) on MultiChallenge, GDPval,
-  and ALFWorld, with average tokens. Feeds figure 4.
+  and ALFWorld, with average tokens. Figure 4 plots the ALFWorld column; the
+  other two are cited in its caption.
 - `data/table1_multichallenge_gemini_flash_ci.csv`: Table 1, MultiChallenge
   accuracy with 95% confidence intervals for the Gemini 3.5 Flash block, the
   graph against seven text-based memory baselines. Quoted in prose.
