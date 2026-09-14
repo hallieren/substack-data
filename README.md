@@ -34,11 +34,13 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 17. [How to Run a Postmortem on Your Agent](https://hallieren.substack.com/p/how-to-run-a-postmortem-on-your-agent)
 18. [Are You Scoring Your Agent's Brain or Its Shell?](https://hallieren.substack.com/p/are-you-scoring-your-agents-brain-or)
 19. [How to Read a Trace Without Believing It](https://hallieren.substack.com/p/how-to-read-a-trace-without-believing)
+20. [How to Let Your Agent Rewrite Its Own Playbook](https://hallieren.substack.com/p/how-to-let-your-agent-rewrite-its-own)
 
 ## Data drops
 
 | Date | Article | Contents |
 |---|---|---|
+| [2026-09-14](2026-09-14/) | [How to Let Your Agent Rewrite Its Own Playbook](https://hallieren.substack.com/p/how-to-let-your-agent-rewrite-its-own) | Paper explainer, no experiment of ours: every figure number from arXiv 2609.09153 transcribed, the five playbook construction modes on MultiChallenge (87.5 unguided, 58.9 hand-written, 53.6 one static update, 92.9 gated loop), the ten self-evolution rounds on the virtual CFO task with kept / rolled-back decisions and test survival of kept checkpoints, and the prose numbers with their sections |
 | [2026-09-10](2026-09-10/) | [How to Read a Trace Without Believing It](https://hallieren.substack.com/p/how-to-read-a-trace-without-believing) | Post explainer, no experiment of ours: every figure number from Anthropic's alignment assessment of its cybersecurity eval incidents transcribed, out-of-context re-judging (1% in trace vs 79% one at a time), resampling with planted evidence (stated belief moves ~80 points, next action moves 1), the offline monitor with and without the model's reasoning (1% vs 50%), the scope-reminder momentum curve, the 150-run replication, and the three text-vs-figure discrepancies |
 | [2026-09-09](2026-09-09/) | [Are You Scoring Your Agent's Brain or Its Shell?](https://hallieren.substack.com/p/are-you-scoring-your-agents-brain-or) | Paper explainer, no experiment of ours: every number behind the four figures transcribed from arXiv 2609.05663 (Table 3 volatility sextiles, capture gap and bracket, harness levers, three-model replay league), with the unit conversions the article uses |
 | [2026-09-08](2026-09-08/) | [How to Run a Postmortem on Your Agent](https://hallieren.substack.com/p/how-to-run-a-postmortem-on-your-agent) | Postmortem on the 09-07 gated run that left a test file in its diff: all 116 tool calls of the run classified (zero model calls), first bad step and its secondary, diff list, layered interception tally over the 15 gated runs and the 15-run baseline, seven action items each naming equipment and an owner, the atlas row split, the ownership table and health check |
