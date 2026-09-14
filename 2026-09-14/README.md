@@ -18,21 +18,32 @@ undisclosed crises, capital arriving one to six months after it is requested,
 
 - `data/blog01_multichallenge_modes.csv`: Table 2 / Table 10, MultiChallenge
   overall success for the unguided agent and the five playbook construction
-  modes. Feeds figure 1. "One offline static update" is the paper's Mode 2,
-  which Section 5.3 calls "a single offline update"; the formal mode
-  definitions in Appendix D.2 did not survive the HTML conversion we read.
-- `data/blog04_enterprisearena_rounds.csv`: Table 11, the ten rounds of
+  modes, with the count of test dialogues passed out of 56. Feeds figure 1.
+  "One offline update, no gate" is the paper's Mode 2, which Section 5.3 calls
+  "a single offline update"; the formal mode definitions in Appendix D.2 did
+  not survive the HTML conversion we read.
+- `data/blog03_enterprisearena_rounds.csv`: Table 11, the ten rounds of
   self-evolution on the CFO task. Validation full-horizon survival and mean
   lifespan per round, whether the gate kept or rolled back the candidate, test
   survival of kept checkpoints, and the paper's note on what each round
-  changed (Appendix E.2 and E.3). Feeds figure 4.
+  changed (Appendix E.2 and E.3). Feeds figure 3.
+- `data/blog04_localization_ablation.csv`: Table 3, the same graph consumed
+  four ways (no graph, full graph pasted in, full graph turned into a hint,
+  localized two-hop subgraph turned into a hint) on MultiChallenge, GDPval,
+  and ALFWorld, with average tokens. Feeds figure 4.
+- `data/table1_multichallenge_gemini_flash_ci.csv`: Table 1, MultiChallenge
+  accuracy with 95% confidence intervals for the Gemini 3.5 Flash block, the
+  graph against seven text-based memory baselines. Quoted in prose.
+- `data/table8_enterprisearena_gemini_flash.csv`: Table 8, the main
+  EnterpriseArena comparison for Gemini 3.5 Flash over 50 test episodes, where
+  every configuration including the graph has 0% full-horizon survival.
+  Quoted in prose next to the 85% from the 20-episode self-evolution study.
 - `data/prose_numbers.csv`: every other number the article states, with its
   section.
 
 ## What is not here
 
-No trajectories, no scripts, no model calls. Figures 2, 3, and 5 are diagrams
-of the paper's Section 3 and Algorithm 1 and carry no numbers beyond the
-20-episode split size. The figure HTML lives with the article draft. All
+No trajectories, no scripts, no model calls. Figures 2 and 5 are diagrams of the
+paper's Section 3 and of the article's own checklist and carry no numbers. The figure HTML lives with the article draft. All
 benchmarks were run by the paper's authors; the MultiChallenge score is an
 LLM judge's.
