@@ -35,11 +35,13 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 18. [Are You Scoring Your Agent's Brain or Its Shell?](https://hallieren.substack.com/p/are-you-scoring-your-agents-brain-or)
 19. [How to Read a Trace Without Believing It](https://hallieren.substack.com/p/how-to-read-a-trace-without-believing)
 20. [How to Let an Agent Edit Its Own Playbook Without Drifting](https://hallieren.substack.com/p/how-to-let-an-agent-edit-its-own)
+21. [Does Your Agent Need a Boss?](https://hallieren.substack.com/p/does-your-agent-need-a-boss)
 
 ## Data drops
 
 | Date | Article | Contents |
 |---|---|---|
+| [2026-09-15](2026-09-15/) | [Does Your Agent Need a Boss?](https://hallieren.substack.com/p/does-your-agent-need-a-boss) | Paper explainer, no experiment of ours: the four judged outcomes of the flat-versus-hierarchical paired experiment from arXiv 2609.14767 (utility 4.715 vs 4.621, clarity 4.454 vs 4.360, spec accuracy at ceiling), writing clarity by number of send-backs (4.48 / 4.30 / 4.10 / 3.79), tokens and cost per report (+51.5% / +20.2%), and the prose numbers with their sections |
 | [2026-09-14](2026-09-14/) | [How to Let an Agent Edit Its Own Playbook Without Drifting](https://hallieren.substack.com/p/how-to-let-an-agent-edit-its-own) | Paper explainer, no experiment of ours: the ten self-evolution rounds on the virtual CFO task from arXiv 2609.09153 with kept / rolled-back decisions and test survival of kept checkpoints, the Table 3 localization ablation (same graph, four ways of feeding it, ALFWorld 72.6 / 70.3 / 54.5 / 81.5 with tokens), and the prose numbers with their sections |
 | [2026-09-10](2026-09-10/) | [How to Read a Trace Without Believing It](https://hallieren.substack.com/p/how-to-read-a-trace-without-believing) | Post explainer, no experiment of ours: every figure number from Anthropic's alignment assessment of its cybersecurity eval incidents transcribed, out-of-context re-judging (1% in trace vs 79% one at a time), resampling with planted evidence (stated belief moves ~80 points, next action moves 1), the offline monitor with and without the model's reasoning (1% vs 50%), the scope-reminder momentum curve, the 150-run replication, and the three text-vs-figure discrepancies |
 | [2026-09-09](2026-09-09/) | [Are You Scoring Your Agent's Brain or Its Shell?](https://hallieren.substack.com/p/are-you-scoring-your-agents-brain-or) | Paper explainer, no experiment of ours: every number behind the four figures transcribed from arXiv 2609.05663 (Table 3 volatility sextiles, capture gap and bracket, harness levers, three-model replay league), with the unit conversions the article uses |
