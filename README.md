@@ -34,15 +34,16 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 17. [How to Run a Postmortem on Your Agent](https://hallieren.substack.com/p/how-to-run-a-postmortem-on-your-agent)
 18. [Are You Scoring Your Agent's Brain or Its Shell?](https://hallieren.substack.com/p/are-you-scoring-your-agents-brain-or)
 19. [How to Read a Trace Without Believing It](https://hallieren.substack.com/p/how-to-read-a-trace-without-believing)
-20. [How to Let an Agent Edit Its Own Playbook Without Drifting](https://hallieren.substack.com/p/how-to-let-an-agent-edit-its-own)
-21. [Does Your Agent Need a Boss?](https://hallieren.substack.com/p/does-your-agent-need-a-boss)
-22. [What Did You Validate Your Judge Against?](https://hallieren.substack.com/p/what-did-you-validate-your-judge)
-23. [Who Graded GitHub's Agents?](https://hallieren.substack.com/p/who-graded-githubs-agents)
-24. [How to Accept Work You Can't Read](https://hallieren.substack.com/p/how-to-accept-work-you-cant-read)
-25. [Did Your Agent Run What You Approved?](https://hallieren.substack.com/p/did-your-agent-run-what-you-approved)
-26. [Does Your Judge Need to Explain Itself?](https://hallieren.substack.com/p/does-your-judge-need-to-explain-itself)
-27. [Does Your Monitor Know What Nobody Checked?](https://hallieren.substack.com/p/does-your-monitor-know-what-nobody)
-28. [Was Your Agent's Big Find Just Luck?](https://hallieren.substack.com/p/was-your-agents-big-find-just-luck)
+20. [Is Your Agent Taking the Exam Alone?](https://hallieren.substack.com/p/is-your-agent-taking-the-exam-alone)
+21. [How to Let an Agent Edit Its Own Playbook Without Drifting](https://hallieren.substack.com/p/how-to-let-an-agent-edit-its-own)
+22. [Does Your Agent Need a Boss?](https://hallieren.substack.com/p/does-your-agent-need-a-boss)
+23. [What Did You Validate Your Judge Against?](https://hallieren.substack.com/p/what-did-you-validate-your-judge)
+24. [Who Graded GitHub's Agents?](https://hallieren.substack.com/p/who-graded-githubs-agents)
+25. [How to Accept Work You Can't Read](https://hallieren.substack.com/p/how-to-accept-work-you-cant-read)
+26. [Did Your Agent Run What You Approved?](https://hallieren.substack.com/p/did-your-agent-run-what-you-approved)
+27. [Does Your Judge Need to Explain Itself?](https://hallieren.substack.com/p/does-your-judge-need-to-explain-itself)
+28. [Does Your Monitor Know What Nobody Checked?](https://hallieren.substack.com/p/does-your-monitor-know-what-nobody)
+29. [Was Your Agent's Big Find Just Luck?](https://hallieren.substack.com/p/was-your-agents-big-find-just-luck)
 
 ## Data drops
 
@@ -57,6 +58,7 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 | [2026-09-16](2026-09-16/) | [What Did You Validate Your Judge Against?](https://hallieren.substack.com/p/what-did-you-validate-your-judge) | Paper explainer, no experiment of ours: failure rate among transcripts each signal accepted vs its pool (57.5 vs 57.3 human, 32.7 vs 40.2 proxy, 20.0 vs 40.2 gate) from arXiv 2609.12191, the twelve flag-only configurations with reward and satisfaction, wide vs near-equal decision disagreement (0.9% vs 31%) with abstention, the cheap-signal cadence table, and the prose numbers with their sections |
 | [2026-09-15](2026-09-15/) | [Does Your Agent Need a Boss?](https://hallieren.substack.com/p/does-your-agent-need-a-boss) | Paper explainer, no experiment of ours: the four judged outcomes of the flat-versus-hierarchical paired experiment from arXiv 2609.14767 (utility 4.715 vs 4.621, clarity 4.454 vs 4.360, spec accuracy at ceiling), writing clarity by number of send-backs (4.48 / 4.30 / 4.10 / 3.79), tokens and cost per report (+51.5% / +20.2%), and the prose numbers with their sections |
 | [2026-09-14](2026-09-14/) | [How to Let an Agent Edit Its Own Playbook Without Drifting](https://hallieren.substack.com/p/how-to-let-an-agent-edit-its-own) | Paper explainer, no experiment of ours: the ten self-evolution rounds on the virtual CFO task from arXiv 2609.09153 with kept / rolled-back decisions and test survival of kept checkpoints, the Table 3 localization ablation (same graph, four ways of feeding it, ALFWorld 72.6 / 70.3 / 54.5 / 81.5 with tokens), and the prose numbers with their sections |
+| [2026-09-11](2026-09-11/) | [Is Your Agent Taking the Exam Alone?](https://hallieren.substack.com/p/is-your-agent-taking-the-exam-alone) | Incident-report explainer, no experiment of ours: from Nightingale Collective's collusion.wiki report, the five-round timing of one timed lookup task (15m 44s then about 65s per round), the two wiki posts that relayed the same answer 20 minutes apart, agent edits per day from the report's own data (about 13,000 in the coordination week), and the prose numbers with their sections |
 | [2026-09-10](2026-09-10/) | [How to Read a Trace Without Believing It](https://hallieren.substack.com/p/how-to-read-a-trace-without-believing) | Post explainer, no experiment of ours: every figure number from Anthropic's alignment assessment of its cybersecurity eval incidents transcribed, out-of-context re-judging (1% in trace vs 79% one at a time), resampling with planted evidence (stated belief moves ~80 points, next action moves 1), the offline monitor with and without the model's reasoning (1% vs 50%), the scope-reminder momentum curve, the 150-run replication, and the three text-vs-figure discrepancies |
 | [2026-09-09](2026-09-09/) | [Are You Scoring Your Agent's Brain or Its Shell?](https://hallieren.substack.com/p/are-you-scoring-your-agents-brain-or) | Paper explainer, no experiment of ours: every number behind the four figures transcribed from arXiv 2609.05663 (Table 3 volatility sextiles, capture gap and bracket, harness levers, three-model replay league), with the unit conversions the article uses |
 | [2026-09-08](2026-09-08/) | [How to Run a Postmortem on Your Agent](https://hallieren.substack.com/p/how-to-run-a-postmortem-on-your-agent) | Postmortem on the 09-07 gated run that left a test file in its diff: all 116 tool calls of the run classified (zero model calls), first bad step and its secondary, diff list, layered interception tally over the 15 gated runs and the 15-run baseline, seven action items each naming equipment and an owner, the atlas row split, the ownership table and health check |
