@@ -48,11 +48,13 @@ uv run --project "$PICO" --env-file "$PICO/.env" python <drop>/<script>.py ...
 31. [Is Your Top-Scoring Version Really Better?](https://hallieren.substack.com/p/is-your-top-scoring-version-really)
 32. [Does Your Agent Say No When It Should?](https://hallieren.substack.com/p/does-your-agent-say-no-when-it-should)
 33. [Who Is Your Agent Building For?](https://hallieren.substack.com/p/who-is-your-agent-building-for)
+34. [Can Your Agent Pick Its Own Best Idea?](https://hallieren.substack.com/p/can-your-agent-pick-its-own-best-idea)
 
 ## Data drops
 
 | Date | Article | Contents |
 |---|---|---|
+| [2026-10-01](2026-10-01/) | [Can Your Agent Pick Its Own Best Idea?](https://hallieren.substack.com/p/can-your-agent-pick-its-own-best-idea) | Paper explainer, no experiment of ours: from arXiv 2609.39982 (Mid-Harness), success with 4 vs 8 drafts per step under five judges with one fixed 9B generator (no judge 50.0, self-judging 51.0 to 54.8, distilled 57.1, GPT-5.6 Sol 68.0), the port 9090 pair the two judges scored in opposite directions, gain intervals for six generator and judge pairs (two clear zero), and the prose numbers with their sections |
 | [2026-09-30](2026-09-30/) | [Who Is Your Agent Building For?](https://hallieren.substack.com/p/who-is-your-agent-building-for) | Audit explainer, no experiment of ours: Handshake's speculative reward hacking audit of DeepSWE-1.1, the Helm render-order example (requested vs output order, expected score 0.795 to fix vs 0.705 to leave, then kept), per-model floors for grader talk across all runs (over 80 to 90%) and for full-score runs bent by the guess (at least 10 to 25%), and the prose numbers with their sections |
 | [2026-09-29](2026-09-29/) | [Does Your Agent Say No When It Should?](https://hallieren.substack.com/p/does-your-agent-say-no-when-it-should) | Paper explainer, no experiment of ours: from arXiv 2609.23939 (XYEval), tau2-bench airline scores original vs with one added wrong suggestion (Opus 4.8 86 to 64, GPT 5.5 90 to 52, Gemini 3.7 Flash 90 to 42), the share of traces whose reasoning caught the problem but never told the customer (23.0 / 33.8 / 30.8%), relative drops with no warning, a general warning, and the wrong sentence named in advance, and the prose numbers with their sections |
 | [2026-09-28](2026-09-28/) | [Is Your Top-Scoring Version Really Better?](https://hallieren.substack.com/p/is-your-top-scoring-version-really) | Paper explainer, no experiment of ours: the TerminalBench quiz-vs-full-exam comparison (Table 4), the SWE-60 four-run repeatability strip (Table 7, node 11), what the judge found reading the code (section 4.3), and the prose numbers with their sections |
